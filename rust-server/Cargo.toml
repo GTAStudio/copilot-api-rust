@@ -1,0 +1,35 @@
+[package]
+name = "copilot-api-rs"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "copilot-api-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.7", features = ["macros", "json"] }
+async-stream = "0.3"
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+futures = "0.3"
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "gzip"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+axum-extra = { version = "0.9", features = ["typed-header"] }
+once_cell = "1"
+tokio-stream = "0.1"
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "time"] }
+toml = "0.8"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+directories = "5"
+regex = "1"
+dialoguer = "0.11"
+tiktoken-rs = "0.6"
+arboard = "3"

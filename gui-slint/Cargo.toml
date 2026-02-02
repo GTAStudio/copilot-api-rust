@@ -1,0 +1,23 @@
+[package]
+name = "copilot-api-gui"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jason Liang"]
+description = "A Windows GUI for copilot-api with embedded server"
+license = "MIT"
+
+[dependencies]
+slint = { version = "1.14", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "compat-1-2"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+directories = "5"
+arboard = "3"
+ureq = { version = "2", features = ["json"] }
+flate2 = "1"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
+[build-dependencies]
+slint-build = "1.14"
+flate2 = "1"

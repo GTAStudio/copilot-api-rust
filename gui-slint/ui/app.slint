@@ -1,0 +1,511 @@
+import { Button, LineEdit, Switch, VerticalBox, HorizontalBox, ScrollView, ComboBox } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    width: 1280px;
+    height: 900px;
+    title: "Copilot API GUI";
+    default-font-family: "Microsoft YaHei";
+    background: #f5f5f5;
+
+    // Properties
+    in-out property <string> server_port: "4141";
+    in-out property <string> account_type: "individual";
+    in-out property <string> claude_base_url: "http://localhost:4141";
+    in-out property <string> github_token: "";
+    in-out property <bool> use_proxy: false;
+    in-out property <string> proxy_url: "";
+    in-out property <string> proxy_scheme: "http";
+    in-out property <string> proxy_username: "";
+    in-out property <string> proxy_password: "";
+    in-out property <bool> verbose: false;
+    in-out property <bool> manual: false;
+    in-out property <bool> wait_rate_limit: false;
+    in-out property <bool> autostart: false;
+    in-out property <bool> azure_enabled: false;
+    in-out property <string> azure_endpoint: "";
+    in-out property <string> azure_deployment: "";
+    in-out property <string> azure_api_version: "2024-10-21";
+    in-out property <string> azure_api_key: "";
+    in-out property <string> status_text: "Ready";
+    in-out property <string> status_short: "Ready";
+    in-out property <string> deps_summary: "";
+    in-out property <string> deps_text: "";
+    in-out property <string> deps_line1: "";
+    in-out property <string> deps_line2: "";
+    in-out property <string> deps_line3: "";
+    in-out property <string> deps_line4: "";
+    in-out property <string> deps_line5: "";
+    in-out property <string> deps_line6: "";
+    in-out property <string> deps_line7: "";
+    in-out property <string> deps_line8: "";
+    in-out property <string> github_device_code: "";
+    in-out property <string> github_login_url: "https://github.com/login/device";
+
+    // Model selection
+    in-out property <[string]> available_models: ["claude-sonnet-4", "claude-opus-4.5", "gpt-5.2-codex", "gpt-5-mini", "gpt-5", "gpt-4o"];
+    in-out property <string> main_model: "claude-sonnet-4";
+    in-out property <string> fast_model: "gpt-5-mini";
+    in-out property <int> main_model_index: 0;
+    in-out property <int> fast_model_index: 3;
+
+    // Legacy properties
+    in-out property <string> api_base_url: "";
+    in-out property <string> api_key: "";
+    in-out property <string> rate_limit_seconds: "";
+    in-out property <bool> show_copilot_section: true;
+    in-out property <bool> show_azure_section: false;
+    in-out property <bool> is_chinese: false;
+    in-out property <bool> server_running: false;
+    in-out property <bool> installing: false;
+    
+    // Log properties
+    in-out property <string> log_text: "";
+    in-out property <bool> show_log: true;
+
+    callback save();
+    callback toggle_autostart(bool);
+    callback start_server();
+    callback stop_server();
+    callback check_deps();
+    callback install_deps();
+    callback copy_device_code();
+    callback copy_login_url();
+    callback open_copilot_auth();
+    callback copy_log();
+    callback clear_log();
+
+    VerticalBox {
+        padding: 12px;
+        spacing: 10px;
+
+        HorizontalBox {
+            height: 52px;
+            Text {
+                text: "Copilot API GUI";
+                font-size: 20px;
+                font-weight: 700;
+                color: #222;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; min-width: 20px; }
+            Text {
+                text: root.status_short;
+                font-size: 11px;
+                color: #777;
+                vertical-alignment: center;
+                max-width: 400px;
+                overflow: elide;
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            HorizontalBox {
+                spacing: 12px;
+
+            // ================= LEFT COLUMN =================
+                VerticalBox {
+                    horizontal-stretch: 1;
+                    spacing: 12px;
+
+                // Server Settings
+                Rectangle {
+                    background: white;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e4e4e4;
+                    VerticalBox {
+                        padding: 12px;
+                        spacing: 8px;
+                        Text { text: "Server Settings"; font-size: 15px; font-weight: 600; color: #333; }
+
+                        HorizontalBox {
+                            spacing: 10px;
+                            VerticalBox {
+                                spacing: 4px;
+                                horizontal-stretch: 1;
+                                Text { text: "Port"; font-size: 12px; color: #666; }
+                                LineEdit { text <=> root.server_port; placeholder-text: "4141"; height: 30px; }
+                            }
+                            VerticalBox {
+                                spacing: 4px;
+                                horizontal-stretch: 2;
+                                Text { text: "Account Type"; font-size: 12px; color: #666; }
+                                LineEdit { text <=> root.account_type; placeholder-text: "individual / business / enterprise"; height: 30px; }
+                            }
+                        }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            Text { text: "Claude Base URL"; font-size: 12px; color: #666; }
+                            LineEdit { text <=> root.claude_base_url; placeholder-text: "http://localhost:4141"; height: 30px; }
+                            Text { text: "Used by Claude-compatible clients."; font-size: 10px; color: #888; }
+                        }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            Text { text: "GitHub Token (optional)"; font-size: 12px; color: #666; }
+                            LineEdit { text <=> root.github_token; placeholder-text: "ghp_xxx (PAT)"; input-type: password; height: 30px; }
+                            Text { text: "Leave blank to use device-code login. Code appears in terminal; open https://github.com/login/device"; font-size: 10px; color: #888; }
+                        }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            Text { text: "GitHub Device Code"; font-size: 12px; color: #666; }
+                            HorizontalBox {
+                                spacing: 8px;
+                                LineEdit { text <=> root.github_device_code; placeholder-text: "(appears after Start)"; read-only: true; height: 30px; horizontal-stretch: 1; }
+                                Button { text: "Copy"; clicked => { root.copy_device_code(); } }
+                            }
+                            Text { text: "Open this URL to authorize:"; font-size: 10px; color: #888; }
+                            HorizontalBox {
+                                spacing: 8px;
+                                LineEdit { text <=> root.github_login_url; read-only: true; height: 30px; horizontal-stretch: 1; }
+                                Button { text: "Copy"; clicked => { root.copy_login_url(); } }
+                            }
+                        }
+                    }
+                }
+
+                // Proxy Settings
+                Rectangle {
+                    background: white;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e4e4e4;
+                    VerticalBox {
+                        padding: 12px;
+                        spacing: 8px;
+                        Text { text: "Proxy"; font-size: 15px; font-weight: 600; color: #333; }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            Text { text: "Use Proxy"; font-size: 12px; color: #333; }
+                            HorizontalBox {
+                                spacing: 8px;
+                                Switch { checked <=> root.use_proxy; horizontal-stretch: 0; }
+                                Text { text: "Enable when your network requires a local proxy."; font-size: 10px; color: #888; vertical-alignment: center; }
+                            }
+                        }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            opacity: root.use_proxy ? 1 : 0.5;
+                            Text { text: "Proxy Protocol"; font-size: 12px; color: #666; }
+                            LineEdit { text <=> root.proxy_scheme; placeholder-text: "http / socks5"; enabled: root.use_proxy; height: 30px; }
+                        }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            opacity: root.use_proxy ? 1 : 0.5;
+                            Text { text: "Proxy Host:Port"; font-size: 12px; color: #666; }
+                            LineEdit { text <=> root.proxy_url; placeholder-text: "127.0.0.1:7890"; enabled: root.use_proxy; height: 30px; }
+                        }
+
+                        HorizontalBox {
+                            spacing: 10px;
+                            opacity: root.use_proxy ? 1 : 0.5;
+                            VerticalBox {
+                                spacing: 4px;
+                                horizontal-stretch: 1;
+                                Text { text: "Proxy Username"; font-size: 12px; color: #666; }
+                                LineEdit { text <=> root.proxy_username; placeholder-text: "(optional)"; enabled: root.use_proxy; height: 30px; }
+                            }
+                            VerticalBox {
+                                spacing: 4px;
+                                horizontal-stretch: 1;
+                                Text { text: "Proxy Password"; font-size: 12px; color: #666; }
+                                LineEdit { text <=> root.proxy_password; placeholder-text: "(optional)"; input-type: password; enabled: root.use_proxy; height: 30px; }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    background: white;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e4e4e4;
+                    VerticalBox {
+                        padding: 12px;
+                        spacing: 8px;
+                        Text { text: "Dependencies"; font-size: 15px; font-weight: 600; color: #333; }
+                        Text { text: root.deps_summary; font-size: 12px; color: #555; }
+                        if root.deps_line1 != "": Text { text: root.deps_line1; font-size: 11px; color: #888; }
+                        if root.deps_line2 != "": Text { text: root.deps_line2; font-size: 11px; color: #888; }
+                        if root.deps_line3 != "": Text { text: root.deps_line3; font-size: 11px; color: #888; }
+                        if root.deps_line4 != "": Text { text: root.deps_line4; font-size: 11px; color: #888; }
+                        if root.deps_line5 != "": Text { text: root.deps_line5; font-size: 11px; color: #888; }
+                        if root.deps_line6 != "": Text { text: root.deps_line6; font-size: 11px; color: #888; }
+                        if root.deps_line7 != "": Text { text: root.deps_line7; font-size: 11px; color: #888; }
+                        if root.deps_line8 != "": Text { text: root.deps_line8; font-size: 11px; color: #888; }
+                        HorizontalBox {
+                            spacing: 8px;
+                            Button { text: "Check"; enabled: !root.installing; clicked => { root.check_deps(); } }
+                            Button { text: root.installing ? "Installing..." : "Install Missing"; enabled: !root.installing; clicked => { root.install_deps(); } }
+                            Button { text: "Copilot Auth"; clicked => { root.open_copilot_auth(); } }
+                        }
+                    }
+                }
+            }
+
+            // ================= RIGHT COLUMN =================
+                VerticalBox {
+                    horizontal-stretch: 1;
+                    spacing: 12px;
+
+                // Model Selection
+                Rectangle {
+                    background: white;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e4e4e4;
+                    VerticalBox {
+                        padding: 12px;
+                        spacing: 8px;
+                        Text { text: "Model Selection"; font-size: 15px; font-weight: 600; color: #333; }
+                        Text { text: "Select AI models for Claude Code. Models are fetched from Copilot."; font-size: 10px; color: #888; }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            Text { text: "Main Model (ANTHROPIC_MODEL)"; font-size: 12px; color: #666; }
+                            ComboBox {
+                                model: root.available_models;
+                                current-value <=> root.main_model;
+                                height: 30px;
+                            }
+                            Text { text: "Used for complex tasks. Mapped from Claude names to Copilot models."; font-size: 10px; color: #888; }
+                        }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            Text { text: "Fast Model (ANTHROPIC_SMALL_FAST_MODEL)"; font-size: 12px; color: #666; }
+                            ComboBox {
+                                model: root.available_models;
+                                current-value <=> root.fast_model;
+                                height: 30px;
+                            }
+                            Text { text: "Used for quick background tasks."; font-size: 10px; color: #888; }
+                        }
+                    }
+                }
+
+                // Runtime Options
+                Rectangle {
+                    background: white;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e4e4e4;
+                    VerticalBox {
+                        padding: 12px;
+                        spacing: 8px;
+                        Text { text: "Runtime Options"; font-size: 15px; font-weight: 600; color: #333; }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            Text { text: "Verbose Logging"; font-size: 12px; color: #333; }
+                            HorizontalBox {
+                                spacing: 8px;
+                                Switch { checked <=> root.verbose; horizontal-stretch: 0; }
+                                Text { text: "Print detailed logs for debugging."; font-size: 10px; color: #888; vertical-alignment: center; }
+                            }
+                        }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            Text { text: "Manual Approval"; font-size: 12px; color: #333; }
+                            HorizontalBox {
+                                spacing: 8px;
+                                Switch { checked <=> root.manual; horizontal-stretch: 0; }
+                                Text { text: "Require manual approval before sending requests."; font-size: 10px; color: #888; vertical-alignment: center; }
+                            }
+                        }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            Text { text: "Wait on Rate Limit"; font-size: 12px; color: #333; }
+                            HorizontalBox {
+                                spacing: 8px;
+                                Switch { checked <=> root.wait_rate_limit; horizontal-stretch: 0; }
+                                Text { text: "Pause and retry when rate-limited."; font-size: 10px; color: #888; vertical-alignment: center; }
+                            }
+                        }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            Text { text: "Start on Boot"; font-size: 12px; color: #333; }
+                            HorizontalBox {
+                                spacing: 8px;
+                                Switch { checked <=> root.autostart; toggled => { root.toggle_autostart(self.checked); } horizontal-stretch: 0; }
+                                Text { text: "Automatically start the server when Windows starts."; font-size: 10px; color: #888; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+
+                // Azure OpenAI
+                Rectangle {
+                    background: white;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e4e4e4;
+                    VerticalBox {
+                        padding: 12px;
+                        spacing: 8px;
+                        Text { text: "Azure OpenAI"; font-size: 15px; font-weight: 600; color: #333; }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            Text { text: "Enable Azure OpenAI"; font-size: 12px; color: #333; }
+                            HorizontalBox {
+                                spacing: 8px;
+                                Switch { checked <=> root.azure_enabled; horizontal-stretch: 0; }
+                                Text { text: "When enabled, requests will use Azure OpenAI credentials."; font-size: 10px; color: #888; vertical-alignment: center; }
+                            }
+                        }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            opacity: root.azure_enabled ? 1 : 0.5;
+                            Text { text: "Endpoint"; font-size: 12px; color: #666; }
+                            LineEdit { text <=> root.azure_endpoint; placeholder-text: "https://your-resource.openai.azure.com"; enabled: root.azure_enabled; height: 30px; }
+                        }
+
+                        HorizontalBox {
+                            spacing: 10px;
+                            opacity: root.azure_enabled ? 1 : 0.5;
+                            VerticalBox {
+                                spacing: 4px;
+                                horizontal-stretch: 1;
+                                Text { text: "Deployment"; font-size: 12px; color: #666; }
+                                LineEdit { text <=> root.azure_deployment; placeholder-text: "gpt-4o"; enabled: root.azure_enabled; height: 30px; }
+                            }
+                            VerticalBox {
+                                spacing: 4px;
+                                horizontal-stretch: 1;
+                                Text { text: "API Version"; font-size: 12px; color: #666; }
+                                LineEdit { text <=> root.azure_api_version; placeholder-text: "2024-10-21"; enabled: root.azure_enabled; height: 30px; }
+                            }
+                        }
+
+                        VerticalBox {
+                            spacing: 4px;
+                            opacity: root.azure_enabled ? 1 : 0.5;
+                            Text { text: "API Key"; font-size: 12px; color: #666; }
+                            LineEdit { text <=> root.azure_api_key; placeholder-text: "your-api-key"; input-type: password; enabled: root.azure_enabled; height: 30px; }
+                        }
+                    }
+                }
+
+                // Server Log
+                Rectangle {
+                    background: #1e1e1e;
+                    border-radius: 10px;
+                    vertical-stretch: 1;
+                    min-height: 150px;
+                    
+                    VerticalBox {
+                        padding: 10px;
+                        spacing: 6px;
+                        
+                        HorizontalBox {
+                            height: 26px;
+                            spacing: 6px;
+                            Text {
+                                text: "Server Log";
+                                font-size: 13px;
+                                font-weight: 600;
+                                color: #ccc;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            Button {
+                                text: "Copy";
+                                height: 24px;
+                                clicked => { root.copy_log(); }
+                            }
+                            Button {
+                                text: "Clear";
+                                height: 24px;
+                                clicked => { root.clear_log(); }
+                            }
+                        }
+                        
+                        ScrollView {
+                            vertical-stretch: 1;
+                            Text {
+                                text: root.log_text == "" ? "(Log appears here after server starts)" : root.log_text;
+                                font-size: 10px;
+                                font-family: "Consolas";
+                                color: root.log_text == "" ? #666 : #b5ffb5;
+                                wrap: word-wrap;
+                                height: self.preferred-height;
+                            }
+                        }
+                    }
+                }
+            }
+            }
+        }
+
+        VerticalBox {
+            spacing: 6px;
+            HorizontalBox {
+                spacing: 8px;
+                Text {
+                    text: "Actions";
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: #444;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background: root.server_running ? #4caf50 : #ccc;
+                }
+                Text {
+                    text: root.server_running ? "Server Running" : "Server Stopped";
+                    font-size: 11px;
+                    color: root.server_running ? #4caf50 : #888;
+                    vertical-alignment: center;
+                }
+            }
+            Text {
+                text: "Save writes config. Start/Stop controls copilot-api. If token empty: device code appears above after Start.";
+                font-size: 11px;
+                color: #888;
+            }
+            HorizontalBox {
+                height: 56px;
+                spacing: 12px;
+                Button {
+                    text: "Save & Apply";
+                    horizontal-stretch: 1;
+                    height: 48px;
+                    clicked => { root.save(); }
+                }
+                Button {
+                    text: root.server_running ? "⚡ Running..." : "▶ Start Server";
+                    horizontal-stretch: 1;
+                    height: 48px;
+                    enabled: !root.server_running;
+                    clicked => { root.start_server(); }
+                }
+                Button {
+                    text: "■ Stop Server";
+                    horizontal-stretch: 1;
+                    height: 48px;
+                    enabled: root.server_running;
+                    clicked => { root.stop_server(); }
+                }
+            }
+            Text {
+                text: root.status_text;
+                font-size: 11px;
+                color: #888;
+            }
+        }
+    }
+}

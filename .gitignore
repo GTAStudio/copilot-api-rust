@@ -1,0 +1,18 @@
+# Build outputs
+target/
+deployment/*.exe
+
+# Embedded server (generated)
+gui-slint/src/server_embedded.gz
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Cargo lock for binaries is optional
+# Cargo.lock

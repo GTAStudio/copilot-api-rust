@@ -1,0 +1,76 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust-server/target/
+            gui-slint/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build Rust Server
+        run: |
+          cd rust-server
+          cargo build --release
+
+      - name: Build GUI (with embedded server)
+        run: |
+          cd gui-slint
+          cargo build --release
+
+      - name: Prepare Release Artifacts
+        run: |
+          mkdir -p release
+          cp rust-server/target/release/copilot-api-server.exe release/
+          cp gui-slint/target/release/copilot-api-gui.exe release/
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: copilot-api-rust-windows
+          path: release/
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/copilot-api-server.exe
+            release/copilot-api-gui.exe
+          body: |
+            ## Copilot API Rust v${{ github.ref_name }}
+
+            ### Downloads
+            - **copilot-api-gui.exe** - GUI with embedded server (recommended)
+            - **copilot-api-server.exe** - Standalone server (CLI only)
+
+            ### Usage
+            1. Run `copilot-api-gui.exe`
+            2. Click **Copilot Auth** to authenticate
+            3. Click **Start Server**
+            4. Use `http://localhost:PORT` as API endpoint
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
