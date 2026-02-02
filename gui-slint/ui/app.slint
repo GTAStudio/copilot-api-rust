@@ -57,6 +57,8 @@ export component AppWindow inherits Window {
     in-out property <bool> is_chinese: false;
     in-out property <bool> server_running: false;
     in-out property <bool> installing: false;
+    in-out property <bool> hooks_enabled: true;
+    in-out property <string> hooks_config_path: "";
     
     // Log properties
     in-out property <string> log_text: "";
@@ -73,6 +75,7 @@ export component AppWindow inherits Window {
     callback open_copilot_auth();
     callback copy_log();
     callback clear_log();
+    callback open_hooks_config();
 
     VerticalBox {
         padding: 12px;
@@ -244,6 +247,32 @@ export component AppWindow inherits Window {
                             Button { text: "Check"; enabled: !root.installing; clicked => { root.check_deps(); } }
                             Button { text: root.installing ? "Installing..." : "Install Missing"; enabled: !root.installing; clicked => { root.install_deps(); } }
                             Button { text: "Copilot Auth"; clicked => { root.open_copilot_auth(); } }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    background: white;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e4e4e4;
+                    VerticalBox {
+                        padding: 12px;
+                        spacing: 8px;
+                        Text { text: @tr("Hooks"); font-size: 15px; font-weight: 600; color: #333; }
+                        HorizontalBox {
+                            spacing: 8px;
+                            Switch { checked <=> root.hooks_enabled; horizontal-stretch: 0; }
+                            Text { text: @tr("Enable Rust hooks processor"); font-size: 10px; color: #888; vertical-alignment: center; }
+                        }
+                        VerticalBox {
+                            spacing: 4px;
+                            Text { text: @tr("hooks.json"); font-size: 12px; color: #666; }
+                            HorizontalBox {
+                                spacing: 8px;
+                                LineEdit { text <=> root.hooks_config_path; read-only: true; height: 30px; horizontal-stretch: 1; }
+                                Button { text: @tr("Open"); clicked => { root.open_hooks_config(); } }
+                            }
                         }
                     }
                 }

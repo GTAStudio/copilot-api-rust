@@ -35,6 +35,8 @@ pub struct AppConfig {
     // Cached models from server
     #[serde(default)]
     pub cached_models: Vec<String>,
+    #[serde(default)]
+    pub hooks_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -66,6 +68,7 @@ impl Default for AppConfig {
             main_model: "claude-sonnet-4".to_string(),
             fast_model: "gpt-5-mini".to_string(),
             cached_models: Vec::new(),
+            hooks_enabled: true,
         }
     }
 }

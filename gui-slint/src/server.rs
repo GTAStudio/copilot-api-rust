@@ -57,6 +57,10 @@ pub fn start_server(config: &AppConfig) -> Result<Child, String> {
         }
     }
 
+    if !config.hooks_enabled {
+        cmd.env("COPILOT_HOOKS_ENABLED", "0");
+    }
+
     // Provider selection + credentials
     if config.azure_enabled {
         cmd.env("COPILOT_PROVIDER", "azure")

@@ -8,6 +8,7 @@ use crate::{
     approval::check_manual_approval,
     auth_flow::ensure_copilot_token,
     errors::{ApiError, ApiResult},
+    hooks::types::HookInput,
     rate_limit::check_rate_limit,
     routes::responses::{extract_instructions, messages_to_responses_input},
     services::{
@@ -80,6 +81,19 @@ fn requires_responses_api(model: &str) -> bool {
 }
 
 pub async fn handle(State(state): State<AppState>, Json(mut payload): Json<ChatCompletionsPayload>) -> ApiResult<Response> {
+    if let Some(hooks) = &state.hooks {
+        let input = HookInput {
+            hook_type: Some("PreToolUse".to_string()),
+            tool: Some("ChatCompletions".to_string()),
+            tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+            tool_output: None,
+            session_id: None,
+        };
+        let results = hooks.execute_event("PreToolUse", &input).await?;
+        if results.iter().any(|r| r.exit_code != 0) {
+            return Err(ApiError::BadRequest("Hook blocked request".to_string()));
+        }
+    }
     check_manual_approval(&state).await?;
     check_rate_limit(&state).await?;
     let provider = std::env::var("COPILOT_PROVIDER").unwrap_or_else(|_| "copilot".to_string());
@@ -160,10 +174,30 @@ pub async fn handle(State(state): State<AppState>, Json(mut payload): Json<ChatC
 
     if payload.stream.unwrap_or(false) {
         let stream = crate::services::copilot::response_body_stream(resp);
+        if let Some(hooks) = &state.hooks {
+            let input = HookInput {
+                hook_type: Some("PostToolUse".to_string()),
+                tool: Some("ChatCompletions".to_string()),
+                tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+                tool_output: None,
+                session_id: None,
+            };
+            let _ = hooks.execute_event("PostToolUse", &input).await;
+        }
         return Ok(crate::routes::streaming::sse_response(stream));
     }
 
     let json: serde_json::Value = resp.json().await.map_err(|e| ApiError::Upstream(format!("Invalid response: {e}")))?;
+    if let Some(hooks) = &state.hooks {
+        let input = HookInput {
+            hook_type: Some("PostToolUse".to_string()),
+            tool: Some("ChatCompletions".to_string()),
+            tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+            tool_output: Some(json.clone()),
+            session_id: None,
+        };
+        let _ = hooks.execute_event("PostToolUse", &input).await;
+    }
     Ok(Json(json).into_response())
 }
 

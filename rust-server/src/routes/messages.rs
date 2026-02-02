@@ -8,6 +8,7 @@ use crate::{
     approval::check_manual_approval,
     auth_flow::ensure_copilot_token,
     errors::{ApiError, ApiResult},
+    hooks::types::HookInput,
     rate_limit::check_rate_limit,
     routes::responses::{extract_instructions, messages_to_responses_input},
     services::{
@@ -85,6 +86,19 @@ pub struct AnthropicResponse {
 }
 
 pub async fn handle(State(state): State<AppState>, Json(payload): Json<AnthropicMessagesPayload>) -> ApiResult<Response> {
+    if let Some(hooks) = &state.hooks {
+        let input = HookInput {
+            hook_type: Some("PreToolUse".to_string()),
+            tool: Some("AnthropicMessages".to_string()),
+            tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+            tool_output: None,
+            session_id: None,
+        };
+        let results = hooks.execute_event("PreToolUse", &input).await?;
+        if results.iter().any(|r| r.exit_code != 0) {
+            return Err(ApiError::BadRequest("Hook blocked request".to_string()));
+        }
+    }
     check_manual_approval(&state).await?;
     check_rate_limit(&state).await?;
     let provider = std::env::var("COPILOT_PROVIDER").unwrap_or_else(|_| "copilot".to_string());
@@ -93,9 +107,29 @@ pub async fn handle(State(state): State<AppState>, Json(payload): Json<Anthropic
         let resp = anthropic::create_messages(&state.client, &serde_json::to_value(&payload).unwrap()).await?;
         if payload.stream.unwrap_or(false) {
             let stream = crate::services::copilot::response_body_stream(resp);
+            if let Some(hooks) = &state.hooks {
+                let input = HookInput {
+                    hook_type: Some("PostToolUse".to_string()),
+                    tool: Some("AnthropicMessages".to_string()),
+                    tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+                    tool_output: None,
+                    session_id: None,
+                };
+                let _ = hooks.execute_event("PostToolUse", &input).await;
+            }
             return Ok(crate::routes::streaming::sse_response(stream));
         }
         let json: serde_json::Value = resp.json().await.map_err(|e| ApiError::Upstream(format!("Invalid Anthropic response: {e}")))?;
+        if let Some(hooks) = &state.hooks {
+            let input = HookInput {
+                hook_type: Some("PostToolUse".to_string()),
+                tool: Some("AnthropicMessages".to_string()),
+                tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+                tool_output: Some(json.clone()),
+                session_id: None,
+            };
+            let _ = hooks.execute_event("PostToolUse", &input).await;
+        }
         return Ok(Json(json).into_response());
     }
     let resolved_model = resolve_model_alias(&payload.model);
@@ -110,11 +144,31 @@ pub async fn handle(State(state): State<AppState>, Json(payload): Json<Anthropic
     let resp = create_chat_completions(&state.client, &config, &token, &openai_payload).await?;
 
     if payload.stream.unwrap_or(false) {
+        if let Some(hooks) = &state.hooks {
+            let input = HookInput {
+                hook_type: Some("PostToolUse".to_string()),
+                tool: Some("AnthropicMessages".to_string()),
+                tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+                tool_output: None,
+                session_id: None,
+            };
+            let _ = hooks.execute_event("PostToolUse", &input).await;
+        }
         return Ok(stream_anthropic(resp));
     }
 
     let json: serde_json::Value = resp.json().await.map_err(|e| ApiError::Upstream(format!("Invalid response: {e}")))?;
     let anthropic = translate_to_anthropic(&json, &payload.model);
+    if let Some(hooks) = &state.hooks {
+        let input = HookInput {
+            hook_type: Some("PostToolUse".to_string()),
+            tool: Some("AnthropicMessages".to_string()),
+            tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+            tool_output: Some(anthropic.clone()),
+            session_id: None,
+        };
+        let _ = hooks.execute_event("PostToolUse", &input).await;
+    }
     Ok(Json(anthropic).into_response())
 }
 
@@ -520,6 +574,7 @@ mod tests {
         crate::state::AppState {
             config: std::sync::Arc::new(tokio::sync::RwLock::new(config)),
             client,
+            hooks: None,
         }
     }
 

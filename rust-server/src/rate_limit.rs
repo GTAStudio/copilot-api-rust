@@ -48,6 +48,7 @@ mod tests {
         let state = AppState {
             config: std::sync::Arc::new(tokio::sync::RwLock::new(config)),
             client: reqwest::Client::new(),
+            hooks: None,
         };
 
         let result = check_rate_limit(&state).await;
@@ -64,6 +65,7 @@ mod tests {
         let state = AppState {
             config: std::sync::Arc::new(tokio::sync::RwLock::new(config)),
             client: reqwest::Client::new(),
+            hooks: None,
         };
 
         let result = check_rate_limit(&state).await;
@@ -82,6 +84,7 @@ mod tests {
         let state = AppState {
             config: std::sync::Arc::new(tokio::sync::RwLock::new(config)),
             client: reqwest::Client::new(),
+            hooks: None,
         };
 
         let result = check_rate_limit(&state).await;

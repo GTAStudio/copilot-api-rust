@@ -47,6 +47,10 @@ pub enum Command {
     CheckUsage,
     /// Print debug information
     Debug(DebugArgs),
+    /// Run Claude hooks processor
+    Hook(HookArgs),
+    /// Sync everything-claude-code skills into .claude/skills
+    SyncSkills,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -98,4 +102,13 @@ pub struct AuthArgs {
 pub struct DebugArgs {
     #[arg(long, default_value_t = false)]
     pub json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct HookArgs {
+    #[arg(long)]
+    pub event: Option<String>,
+
+    #[arg(long)]
+    pub config: Option<String>,
 }

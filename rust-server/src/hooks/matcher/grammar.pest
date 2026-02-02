@@ -1,0 +1,15 @@
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+
+expr = { or_expr }
+or_expr = { and_expr ~ ( "||" ~ and_expr )* }
+and_expr = { not_expr ~ ( "&&" ~ not_expr )* }
+not_expr = { neg? ~ primary }
+neg = { "!" }
+primary = { "(" ~ expr ~ ")" | predicate }
+predicate = { field ~ op ~ value | "*" }
+
+op = { "==" | "!=" | "matches" }
+field = { ident ~ ( "." ~ ident )* }
+ident = @{ (ASCII_ALPHANUMERIC | "_" )+ }
+value = { string }
+string = @{ "\"" ~ ( "\\\"" | !"\"" ~ ANY )* ~ "\"" }

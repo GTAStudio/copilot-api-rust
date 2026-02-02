@@ -10,6 +10,7 @@ A Windows GUI built with Slint/Rust that **embeds the Rust copilot-api server**.
 - **Model Selection** - Auto-fetch available models list
 - **Azure/OpenAI/Anthropic** - Multi-provider compatibility
 - **Log Viewer** - Built-in real-time log display
+- **Claude Code Integration** - Rust-native hooks + full skills sync
 
 ## Artifacts
 
@@ -31,6 +32,18 @@ Run the standalone server if you don’t need the GUI:
 ```
 deployment/copilot-api-server.exe start --host 127.0.0.1 --port 8989
 ```
+
+## Claude Code Integration
+
+- **Hooks**: Config at .claude/hooks/hooks.json
+- **Enable/Disable**: GUI switch or env COPILOT_HOOKS_ENABLED=0
+- **Sync skills (full)**:
+
+```
+copilot-api-server.exe sync-skills
+```
+
+This pulls all skills from everything-claude-code into .claude/skills and writes THIRD_PARTY_NOTICES.txt.
 
 ## Configuration
 
@@ -92,6 +105,7 @@ MIT License
 - **模型选择** - 自动获取可用模型列表
 - **Azure/OpenAI/Anthropic** - 多供应商兼容
 - **日志查看器** - 内置实时日志显示
+- **Claude Code 集成** - Rust 原生 hooks + 全量 skills 同步
 
 ## 产物
 
@@ -115,6 +129,18 @@ MIT License
 ```
 deployment/copilot-api-server.exe start --host 127.0.0.1 --port 8989
 ```
+
+## Claude Code 集成
+
+- **Hooks**：配置文件在 .claude/hooks/hooks.json
+- **启用/禁用**：GUI 开关或环境变量 COPILOT_HOOKS_ENABLED=0
+- **全量同步 skills**：
+
+```
+copilot-api-server.exe sync-skills
+```
+
+此命令会将 everything-claude-code 的全部 skills 同步到 .claude/skills，并写入 THIRD_PARTY_NOTICES.txt。
 
 ## 配置说明
 

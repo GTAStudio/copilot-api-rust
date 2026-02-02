@@ -21,7 +21,7 @@ axum-extra = { version = "0.9", features = ["typed-header"] }
 once_cell = "1"
 tokio-stream = "0.1"
 futures-util = "0.3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "time", "process"] }
 toml = "0.8"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
@@ -33,3 +33,7 @@ regex = "1"
 dialoguer = "0.11"
 tiktoken-rs = "0.6"
 arboard = "3"
+chrono = { version = "0.4", features = ["serde"] }
+walkdir = "2"
+pest = "2.7"
+pest_derive = "2.7"

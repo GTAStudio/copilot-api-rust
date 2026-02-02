@@ -2,10 +2,13 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::hooks::HookExecutor;
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub config: Arc<RwLock<AppConfig>>,
     pub client: reqwest::Client,
+    pub hooks: Option<Arc<HookExecutor>>,
 }
 
 #[derive(Debug, Clone)]

@@ -3,6 +3,8 @@ use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tower_http::{cors::{Any, CorsLayer}, trace::TraceLayer};
 use cli::{Command, StartArgs, AuthArgs, DebugArgs};
+use hooks::{HookExecutor, types::HookInput};
+use std::io::Read;
 
 mod approval;
 mod commands;
@@ -18,6 +20,8 @@ mod state;
 mod token_store;
 mod utils;
 mod tokenizer;
+mod hooks;
+mod skills_sync;
 
 #[tokio::main]
 async fn main() {
@@ -39,6 +43,7 @@ async fn main() {
         let state = state::AppState {
             config: std::sync::Arc::new(tokio::sync::RwLock::new(config)),
             client,
+            hooks: None,
         };
         if let Err(err) = commands::run_check_usage(&state).await {
             eprintln!("Failed to fetch usage: {}", err);
@@ -49,6 +54,35 @@ async fn main() {
     if let Some(Command::Debug(DebugArgs { json })) = &cli.command {
         if let Err(err) = commands::run_debug(*json).await {
             eprintln!("Failed to print debug info: {}", err);
+        }
+        return;
+    }
+
+    if let Some(Command::SyncSkills) = &cli.command {
+        if let Err(err) = skills_sync::sync_skills().await {
+            eprintln!("Failed to sync skills: {}", err);
+        } else {
+            println!("Skills synced into .claude/skills");
+        }
+        return;
+    }
+
+    if let Some(Command::Hook(args)) = &cli.command {
+        let input = read_hook_input();
+        let event = args.event.clone().or_else(|| input.hook_type.clone()).unwrap_or_else(|| "PreToolUse".to_string());
+        let observer = hooks::observe::start_observer().await.ok();
+        let config_path = args.config.as_ref().map(std::path::PathBuf::from);
+        let executor = HookExecutor::load(config_path, observer).unwrap();
+        let results = executor.execute_event(&event, &input).await.unwrap_or_default();
+        let blocked = results.iter().any(|r| r.exit_code != 0);
+        for r in &results {
+            if !r.stderr.is_empty() {
+                eprintln!("{}", r.stderr.trim_end());
+            }
+        }
+        println!("{}", serde_json::to_string(&input).unwrap_or_default());
+        if blocked {
+            std::process::exit(1);
         }
         return;
     }
@@ -108,10 +142,31 @@ async fn main() {
     }
     config.vscode_version = services::vscode::fetch_vscode_version().await;
 
+    let hooks_enabled = std::env::var("COPILOT_HOOKS_ENABLED")
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+        .unwrap_or(true);
+    let observer = if hooks_enabled { hooks::observe::start_observer().await.ok() } else { None };
+    let hook_executor = if hooks_enabled {
+        HookExecutor::load(None, observer).ok().map(std::sync::Arc::new)
+    } else {
+        None
+    };
     let state = state::AppState {
         config: std::sync::Arc::new(tokio::sync::RwLock::new(config)),
         client,
+        hooks: hook_executor.clone(),
     };
+
+    if let Some(hooks) = hook_executor.clone() {
+        let input = HookInput { hook_type: Some("SessionStart".to_string()), ..Default::default() };
+        let _ = hooks.execute_event("SessionStart", &input).await;
+        let stop_hooks = hooks.clone();
+        tokio::spawn(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            let input = HookInput { hook_type: Some("SessionEnd".to_string()), ..Default::default() };
+            let _ = stop_hooks.execute_event("SessionEnd", &input).await;
+        });
+    }
 
     // Prewarm tokens/models in background for stability and faster first request.
     {
@@ -228,6 +283,8 @@ fn resolve_verbose(cli: &cli::Cli) -> bool {
         Some(Command::Auth(args)) => args.verbose,
         Some(Command::Debug(_)) => cli.verbose,
         Some(Command::CheckUsage) => cli.verbose,
+        Some(Command::Hook(_)) => cli.verbose,
+        Some(Command::SyncSkills) => cli.verbose,
         None => cli.verbose,
     }
 }
@@ -243,4 +300,13 @@ fn init_tracing(verbose: bool) {
         .with(filter)
         .with(tracing_subscriber::fmt::layer())
         .init();
+}
+
+fn read_hook_input() -> HookInput {
+    let mut buffer = String::new();
+    let _ = std::io::stdin().read_to_string(&mut buffer);
+    if buffer.trim().is_empty() {
+        return HookInput::default();
+    }
+    serde_json::from_str::<HookInput>(&buffer).unwrap_or_default()
 }

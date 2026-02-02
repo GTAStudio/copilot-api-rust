@@ -9,6 +9,7 @@ mod config;
 mod env_check;
 mod models;
 mod server;
+mod hooks_config;
 
 use config::{AppConfig, load_config, save_config};
 use arboard::Clipboard;
@@ -49,6 +50,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_azure_api_key(config.azure_api_key.clone().into());
     ui.set_show_copilot_section(config.show_copilot_section);
     ui.set_show_azure_section(config.show_azure_section);
+    ui.set_hooks_enabled(config.hooks_enabled);
+    ui.set_hooks_config_path(hooks_config::hooks_config_path_string().into());
     
     // Initialize model selection
     setup_model_selection(&ui, &config);
@@ -284,6 +287,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ui) = ui_handle.upgrade() {
             clear_log_buffer(&ui);
             set_status(&ui, "Log cleared");
+        }
+    });
+
+    let ui_handle = ui.as_weak();
+    ui.on_open_hooks_config(move || {
+        if let Some(ui) = ui_handle.upgrade() {
+            let path = hooks_config::hooks_config_path_string();
+            if let Err(err) = open_url(&path) {
+                set_status(&ui, &format!("Open hooks config failed: {}", err));
+            } else {
+                set_status(&ui, "Hooks config opened");
+            }
         }
     });
 
@@ -621,6 +636,7 @@ fn config_from_ui(ui: &AppWindow) -> AppConfig {
         fast_model: ui.get_fast_model().to_string(),
         // Preserve cached models from existing config
         cached_models: load_config().map(|c| c.cached_models).unwrap_or_default(),
+        hooks_enabled: ui.get_hooks_enabled(),
     }
 }
 

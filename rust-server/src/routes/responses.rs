@@ -5,6 +5,7 @@ use crate::{
     approval::check_manual_approval,
     auth_flow::ensure_copilot_token,
     errors::{ApiError, ApiResult},
+    hooks::types::HookInput,
     rate_limit::check_rate_limit,
     services::{copilot::{create_responses, ResponsesPayload}, openai, azure},
     state::AppState,
@@ -43,6 +44,19 @@ pub struct ResponsesResponse {
 }
 
 pub async fn handle(State(state): State<AppState>, Json(payload): Json<ResponsesPayload>) -> ApiResult<Response> {
+    if let Some(hooks) = &state.hooks {
+        let input = HookInput {
+            hook_type: Some("PreToolUse".to_string()),
+            tool: Some("Responses".to_string()),
+            tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+            tool_output: None,
+            session_id: None,
+        };
+        let results = hooks.execute_event("PreToolUse", &input).await?;
+        if results.iter().any(|r| r.exit_code != 0) {
+            return Err(ApiError::BadRequest("Hook blocked request".to_string()));
+        }
+    }
     check_manual_approval(&state).await?;
     check_rate_limit(&state).await?;
     let provider = std::env::var("COPILOT_PROVIDER").unwrap_or_else(|_| "copilot".to_string());
@@ -55,9 +69,29 @@ pub async fn handle(State(state): State<AppState>, Json(payload): Json<Responses
             let resp = azure::create_responses(&state.client, &cfg, &serde_json::to_value(&azure_payload).unwrap()).await?;
             if payload.stream.unwrap_or(false) {
                 let stream = crate::services::copilot::response_body_stream(resp);
+                if let Some(hooks) = &state.hooks {
+                    let input = HookInput {
+                        hook_type: Some("PostToolUse".to_string()),
+                        tool: Some("Responses".to_string()),
+                        tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+                        tool_output: None,
+                        session_id: None,
+                    };
+                    let _ = hooks.execute_event("PostToolUse", &input).await;
+                }
                 return Ok(crate::routes::streaming::sse_response(stream));
             }
             let json: serde_json::Value = resp.json().await.map_err(|e| ApiError::Upstream(format!("Invalid Azure responses payload: {e}")))?;
+            if let Some(hooks) = &state.hooks {
+                let input = HookInput {
+                    hook_type: Some("PostToolUse".to_string()),
+                    tool: Some("Responses".to_string()),
+                    tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+                    tool_output: Some(json.clone()),
+                    session_id: None,
+                };
+                let _ = hooks.execute_event("PostToolUse", &input).await;
+            }
             return Ok(Json(json).into_response());
         }
     }
@@ -69,9 +103,29 @@ pub async fn handle(State(state): State<AppState>, Json(payload): Json<Responses
         let resp = openai::create_responses(&state.client, &serde_json::to_value(&payload).unwrap()).await?;
         if payload.stream.unwrap_or(false) {
             let stream = crate::services::copilot::response_body_stream(resp);
+            if let Some(hooks) = &state.hooks {
+                let input = HookInput {
+                    hook_type: Some("PostToolUse".to_string()),
+                    tool: Some("Responses".to_string()),
+                    tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+                    tool_output: None,
+                    session_id: None,
+                };
+                let _ = hooks.execute_event("PostToolUse", &input).await;
+            }
             return Ok(crate::routes::streaming::sse_response(stream));
         }
         let json: serde_json::Value = resp.json().await.map_err(|e| ApiError::Upstream(format!("Invalid OpenAI responses payload: {e}")))?;
+        if let Some(hooks) = &state.hooks {
+            let input = HookInput {
+                hook_type: Some("PostToolUse".to_string()),
+                tool: Some("Responses".to_string()),
+                tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+                tool_output: Some(json.clone()),
+                session_id: None,
+            };
+            let _ = hooks.execute_event("PostToolUse", &input).await;
+        }
         return Ok(Json(json).into_response());
     }
 
@@ -82,10 +136,30 @@ pub async fn handle(State(state): State<AppState>, Json(payload): Json<Responses
 
     if payload.stream.unwrap_or(false) {
         let stream = crate::services::copilot::response_body_stream(resp);
+        if let Some(hooks) = &state.hooks {
+            let input = HookInput {
+                hook_type: Some("PostToolUse".to_string()),
+                tool: Some("Responses".to_string()),
+                tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+                tool_output: None,
+                session_id: None,
+            };
+            let _ = hooks.execute_event("PostToolUse", &input).await;
+        }
         return Ok(crate::routes::streaming::sse_response(stream));
     }
 
     let json: serde_json::Value = resp.json().await.map_err(|e| ApiError::Upstream(format!("Invalid responses payload: {e}")))?;
+    if let Some(hooks) = &state.hooks {
+        let input = HookInput {
+            hook_type: Some("PostToolUse".to_string()),
+            tool: Some("Responses".to_string()),
+            tool_input: Some(serde_json::to_value(&payload).unwrap_or_default()),
+            tool_output: Some(json.clone()),
+            session_id: None,
+        };
+        let _ = hooks.execute_event("PostToolUse", &input).await;
+    }
     Ok(Json(json).into_response())
 }
 

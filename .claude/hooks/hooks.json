@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "tool == \"Bash\" && tool_input.command matches \"(npm run dev|pnpm( run)? dev|yarn dev|bun run dev)\"",
+        "hooks": [
+          { "type": "builtin", "name": "tmux_dev_block" }
+        ],
+        "description": "Block dev servers outside tmux"
+      },
+      {
+        "matcher": "tool == \"Bash\" && tool_input.command matches \"(npm (install|test)|pnpm (install|test)|yarn (install|test)|bun (install|test)|cargo build|make|docker|pytest|vitest|playwright)\"",
+        "hooks": [
+          { "type": "builtin", "name": "tmux_reminder" }
+        ],
+        "description": "Remind tmux for long-running commands"
+      },
+      {
+        "matcher": "tool == \"Bash\" && tool_input.command matches \"git push\"",
+        "hooks": [
+          { "type": "builtin", "name": "git_push_reminder" }
+        ],
+        "description": "Reminder before git push"
+      },
+      {
+        "matcher": "tool == \"Write\" && tool_input.file_path matches \"\\.(md|txt)$\" && !(tool_input.file_path matches \"README\\.md|CLAUDE\\.md|AGENTS\\.md|CONTRIBUTING\\.md\")",
+        "hooks": [
+          { "type": "builtin", "name": "block_doc_creation" }
+        ],
+        "description": "Block unnecessary doc file creation"
+      },
+      {
+        "matcher": "tool == \"Edit\" || tool == \"Write\"",
+        "hooks": [
+          { "type": "builtin", "name": "suggest_compact" }
+        ],
+        "description": "Suggest manual compaction"
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "builtin", "name": "pre_compact" }
+        ],
+        "description": "Save state before compaction"
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "builtin", "name": "session_start" }
+        ],
+        "description": "Load previous context and detect package manager"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "tool == \"Bash\" && tool_input.command matches \"gh pr create\"",
+        "hooks": [
+          { "type": "builtin", "name": "pr_create_notice" }
+        ],
+        "description": "Log PR URL and review hint"
+      },
+      {
+        "matcher": "tool == \"Edit\" && tool_input.file_path matches \"\\.(ts|tsx|js|jsx)$\"",
+        "hooks": [
+          { "type": "builtin", "name": "warn_console_log" }
+        ],
+        "description": "Warn console.log after edit"
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "builtin", "name": "check_console_log" }
+        ],
+        "description": "Check console.log in modified files"
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "builtin", "name": "session_end" }
+        ],
+        "description": "Persist session state"
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "builtin", "name": "evaluate_session" }
+        ],
+        "description": "Evaluate session for extractable patterns"
+      }
+    ]
+  }
+}
