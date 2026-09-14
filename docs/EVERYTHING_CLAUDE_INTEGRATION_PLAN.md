@@ -1,5 +1,7 @@
 # Everything-Claude-Code 全量迁移到 Rust 计划（已执行版）
 
+> 历史迁移记录。2026-09-14 起观察日志默认关闭且仅记录元数据，外部命令 hooks 默认禁用，技能同步保留已有文件。当前说明见 [CLIENTS.md](CLIENTS.md)。本次审计与修改全部由主会话完成，未使用子 agent。
+
 > 目标：将 everything-claude-code 的 Node.js hooks 逻辑、规则/代理/技能体系迁移到 Rust 原生实现，保证跨平台、零 Node.js 依赖、单一二进制分发。
 
 ## 范围

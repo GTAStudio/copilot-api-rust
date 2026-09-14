@@ -10,14 +10,18 @@ pub struct AzureConfig {
 
 pub fn load_azure_config(model: &str) -> Option<AzureConfig> {
     let endpoint = std::env::var("AZURE_OPENAI_ENDPOINT").ok()?;
-    let api_key = std::env::var("AZURE_OPENAI_KEY").ok()?;
-    let api_version = std::env::var("AZURE_OPENAI_API_VERSION").unwrap_or_else(|_| "2024-10-01-preview".to_string());
+    let api_key = crate::utils::required_api_key("AZURE_OPENAI_KEY").ok()?;
+    let api_version =
+        std::env::var("AZURE_OPENAI_API_VERSION").unwrap_or_else(|_| "2024-10-21".to_string());
 
-    let deployment = if let Some(dep) = model.strip_prefix("azure:") {
-        dep.to_string()
-    } else {
-        std::env::var("AZURE_OPENAI_DEPLOYMENT").ok()?
-    };
+    let deployment = model
+        .strip_prefix("azure:")
+        .filter(|deployment| !deployment.is_empty())
+        .map(str::to_string)
+        .or_else(|| std::env::var("AZURE_OPENAI_DEPLOYMENT").ok())?;
+    if endpoint.trim().is_empty() || api_key.trim().is_empty() || deployment.is_empty() {
+        return None;
+    }
 
     Some(AzureConfig {
         endpoint: endpoint.trim_end_matches('/').to_string(),
@@ -27,15 +31,47 @@ pub fn load_azure_config(model: &str) -> Option<AzureConfig> {
     })
 }
 
+fn request_url(config: &AzureConfig, operation: &str) -> ApiResult<url::Url> {
+    if config.deployment.is_empty()
+        || config.deployment.len() > 128
+        || !config
+            .deployment
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(ApiError::BadRequest(
+            "Invalid Azure deployment name".to_string(),
+        ));
+    }
+    crate::utils::api_url(&config.endpoint, operation)?;
+    let mut url = url::Url::parse(&config.endpoint)
+        .map_err(|_| ApiError::BadRequest("Invalid Azure endpoint".to_string()))?;
+    {
+        let mut path = url
+            .path_segments_mut()
+            .map_err(|_| ApiError::BadRequest("Invalid Azure endpoint".to_string()))?;
+        path.clear().push("openai");
+        if operation == "responses" {
+            path.push("v1").push("responses");
+        } else {
+            path.push("deployments")
+                .push(&config.deployment)
+                .extend(operation.split('/'));
+        }
+    }
+    if operation != "responses" {
+        url.query_pairs_mut()
+            .append_pair("api-version", &config.api_version);
+    }
+    Ok(url)
+}
+
 pub async fn create_chat_completions(
     client: &reqwest::Client,
     config: &AzureConfig,
     payload: &serde_json::Value,
 ) -> ApiResult<reqwest::Response> {
-    let url = format!(
-        "{}/openai/deployments/{}/chat/completions?api-version={}",
-        config.endpoint, config.deployment, config.api_version
-    );
+    let url = request_url(config, "chat/completions")?;
 
     let resp = client
         .post(url)
@@ -45,12 +81,7 @@ pub async fn create_chat_completions(
         .await
         .map_err(|e| ApiError::Upstream(format!("Azure chat completions failed: {e}")))?;
 
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(ApiError::Upstream(format!("Azure chat completions failed: {text}")));
-    }
-
-    Ok(resp)
+    crate::errors::check_upstream(resp).await
 }
 
 pub async fn create_embeddings(
@@ -58,10 +89,7 @@ pub async fn create_embeddings(
     config: &AzureConfig,
     payload: &serde_json::Value,
 ) -> ApiResult<reqwest::Response> {
-    let url = format!(
-        "{}/openai/deployments/{}/embeddings?api-version={}",
-        config.endpoint, config.deployment, config.api_version
-    );
+    let url = request_url(config, "embeddings")?;
 
     let resp = client
         .post(url)
@@ -71,12 +99,7 @@ pub async fn create_embeddings(
         .await
         .map_err(|e| ApiError::Upstream(format!("Azure embeddings failed: {e}")))?;
 
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(ApiError::Upstream(format!("Azure embeddings failed: {text}")));
-    }
-
-    Ok(resp)
+    crate::errors::check_upstream(resp).await
 }
 
 pub async fn create_responses(
@@ -84,30 +107,24 @@ pub async fn create_responses(
     config: &AzureConfig,
     payload: &serde_json::Value,
 ) -> ApiResult<reqwest::Response> {
-    let url = format!(
-        "{}/openai/deployments/{}/responses?api-version={}",
-        config.endpoint, config.deployment, config.api_version
-    );
+    let url = request_url(config, "responses")?;
+    let mut payload = payload.clone();
+    payload["model"] = config.deployment.clone().into();
 
     let resp = client
         .post(url)
         .header("api-key", &config.api_key)
-        .json(payload)
+        .json(&payload)
         .send()
         .await
         .map_err(|e| ApiError::Upstream(format!("Azure responses failed: {e}")))?;
 
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(ApiError::Upstream(format!("Azure responses failed: {text}")));
-    }
-
-    Ok(resp)
+    crate::errors::check_upstream(resp).await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::load_azure_config;
+    use super::{AzureConfig, load_azure_config};
     use once_cell::sync::Lazy;
     use std::sync::Mutex;
 
@@ -158,10 +175,37 @@ mod tests {
 
         let cfg = load_azure_config("azure").expect("config");
         assert_eq!(cfg.deployment, "env-deployment");
-        assert_eq!(cfg.api_version, "2024-10-01-preview");
+        assert_eq!(cfg.api_version, "2024-10-21");
 
         clear_env("AZURE_OPENAI_ENDPOINT");
         clear_env("AZURE_OPENAI_KEY");
         clear_env("AZURE_OPENAI_DEPLOYMENT");
+    }
+
+    #[test]
+    fn azure_urls_use_stable_responses_and_encoded_deployment_paths() {
+        let config = AzureConfig {
+            endpoint: "https://fixture.openai.azure.com/".to_string(),
+            api_key: "unit-test-key".to_string(),
+            api_version: "2024-10-21".to_string(),
+            deployment: "model-fixture".to_string(),
+        };
+        assert_eq!(
+            super::request_url(&config, "responses")
+                .expect("Responses URL")
+                .as_str(),
+            "https://fixture.openai.azure.com/openai/v1/responses"
+        );
+        assert_eq!(
+            super::request_url(&config, "chat/completions")
+                .expect("chat URL")
+                .as_str(),
+            "https://fixture.openai.azure.com/openai/deployments/model-fixture/chat/completions?api-version=2024-10-21"
+        );
+        let unsafe_config = AzureConfig {
+            deployment: "../escape".to_string(),
+            ..config
+        };
+        assert!(super::request_url(&unsafe_config, "chat/completions").is_err());
     }
 }

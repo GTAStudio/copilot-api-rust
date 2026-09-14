@@ -1,0 +1,256 @@
+import { Palette, LineEdit as NativeLineEdit } from "std-widgets.slint";
+
+export global Branding {
+    out property <image> logo: @image-url("assets/logo.png");
+    out property <image> app-icon: @image-url("assets/app-icon.png");
+}
+
+export global Theme {
+    in-out property <bool> dark: false;
+    changed dark => {
+        Palette.color-scheme = dark ? ColorScheme.dark : ColorScheme.light;
+    }
+
+    out property <color> accent: #ffb000;
+    out property <color> accent-hover: dark ? #ffc247 : #eba200;
+    out property <color> accent-soft: dark ? #3c321b : #fff0c2;
+    out property <color> on-accent: #171717;
+    out property <color> accent-text: dark ? #ffc247 : #805600;
+    out property <color> brand-dark: dark ? #141414 : #171717;
+    out property <color> window-bg: dark ? #191919 : #f0f0f0;
+    out property <color> panel-bg: dark ? #242424 : #ffffff;
+    out property <color> surface-subtle: dark ? #202020 : #f8f8f8;
+    out property <color> toolbar-bg: dark ? #212121 : #f6f6f6;
+    out property <color> header-bg: dark ? #212121 : #f0f0f0;
+    out property <color> border: dark ? #3d3d3d : #d5d5d5;
+    out property <color> border-strong: dark ? #555555 : #ababab;
+    out property <color> text: dark ? #ececec : #222222;
+    out property <color> text-muted: dark ? #ababab : #666666;
+    out property <color> text-on-dark: #f2f2f2;
+    out property <color> success: dark ? #66bb6a : #256b29;
+    out property <color> danger: dark ? #ff8a80 : #c62828;
+    out property <color> editor-bg: dark ? #161616 : #1e1e1e;
+    out property <length> radius: 6px;
+}
+
+export component Button inherits Rectangle {
+    in property <string> text: "";
+    in property <image> icon;
+    in property <string> tooltip: "";
+    in property <bool> enabled: true;
+    in property <bool> primary: false;
+    in property <bool> checked: false;
+    callback clicked();
+    private property <bool> key-held: false;
+    private property <bool> hovered: touch.has-hover && root.enabled;
+    forward-focus: key-focus;
+
+    min-width: root.text == "" ? 34px : label.preferred-width + (root.icon.width > 0 ? 50px : 28px);
+    height: 34px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: root.enabled && (root.hovered || key-focus.has-focus || root.checked) ? Theme.accent : Theme.border;
+    background: !root.enabled ? Theme.surface-subtle : root.primary || root.checked ? (touch.pressed ? Theme.accent-hover : Theme.accent) : root.hovered ? Theme.accent-soft : Theme.panel-bg;
+    animate background, border-color { duration: 150ms; }
+
+    accessible-role: button;
+    accessible-label: root.text != "" ? root.text : root.tooltip;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+
+    key-focus := FocusScope {
+        enabled: root.enabled;
+        changed has-focus => { if !self.has-focus { root.key-held = false; } }
+        key-pressed(event) => {
+            if root.enabled && (event.text == Key.Return || event.text == Key.Space) {
+                if !root.key-held { root.key-held = true; root.clicked(); }
+                return accept;
+            }
+            return reject;
+        }
+        key-released(event) => {
+            if event.text == Key.Return || event.text == Key.Space {
+                root.key-held = false;
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    HorizontalLayout {
+        y: (root.height - 18px) / 2;
+        height: 18px;
+        padding-left: root.text == "" ? 8px : 12px;
+        padding-right: root.text == "" ? 8px : 12px;
+        spacing: root.text == "" ? 0px : 8px;
+        alignment: center;
+        if root.icon.width > 0: Image {
+            source: root.icon;
+            width: 16px;
+            height: 16px;
+            image-fit: contain;
+            colorize: !root.enabled ? Theme.text-muted : root.primary || root.checked ? Theme.on-accent : Theme.text;
+        }
+        label := Text {
+            text: root.text;
+            visible: root.text != "";
+            font-size: 12px;
+            font-weight: root.primary || root.checked ? 600 : 500;
+            color: !root.enabled ? Theme.text-muted : root.primary || root.checked ? Theme.on-accent : Theme.text;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { key-focus.focus(); root.clicked(); }
+    }
+
+    if root.hovered && root.tooltip != "": Rectangle {
+        x: root.width - self.width;
+        y: root.height + 4px;
+        width: min(hint-text.preferred-width + 20px, 240px);
+        height: 30px;
+        background: Theme.brand-dark;
+        border-radius: 4px;
+        hint-text := Text {
+            x: 8px;
+            width: parent.width - 16px;
+            height: parent.height;
+            text: root.tooltip;
+            color: Theme.text-on-dark;
+            font-size: 11px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+export component LineEdit inherits Rectangle {
+    in property <bool> enabled <=> control.enabled;
+    in property <InputType> input-type <=> control.input-type;
+    in property <string> placeholder-text <=> control.placeholder-text;
+    in property <bool> read-only <=> control.read-only;
+    in-out property <string> text <=> control.text;
+    forward-focus: control;
+    min-width: 120px;
+    height: 34px;
+    horizontal-stretch: 1;
+    control := NativeLineEdit { width: root.width; height: root.height; }
+    if control.has-focus && root.enabled: Rectangle {
+        x: 4px;
+        y: root.height - 2px;
+        width: root.width - 8px;
+        height: 2px;
+        background: Theme.accent;
+    }
+}
+
+export component Switch inherits Rectangle {
+    in property <string> text: "";
+    in property <bool> enabled: true;
+    in-out property <bool> checked: false;
+    callback toggled();
+    private property <bool> key-held: false;
+    forward-focus: key-focus;
+    min-width: 50px + label.preferred-width;
+    height: 32px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    accessible-role: switch;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => { if root.enabled { root.checked = !root.checked; root.toggled(); } }
+
+    key-focus := FocusScope {
+        enabled: root.enabled;
+        changed has-focus => { if !self.has-focus { root.key-held = false; } }
+        key-pressed(event) => {
+            if root.enabled && (event.text == Key.Return || event.text == Key.Space) {
+                if !root.key-held {
+                    root.key-held = true;
+                    root.checked = !root.checked;
+                    root.toggled();
+                }
+                return accept;
+            }
+            return reject;
+        }
+        key-released(event) => {
+            if event.text == Key.Return || event.text == Key.Space {
+                root.key-held = false;
+                return accept;
+            }
+            return reject;
+        }
+    }
+    rail := Rectangle {
+        x: 0px;
+        y: (root.height - 20px) / 2;
+        width: 40px;
+        height: 20px;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: key-focus.has-focus ? Theme.accent-text : Theme.border-strong;
+        background: root.enabled && root.checked ? Theme.accent : Theme.surface-subtle;
+        Rectangle {
+            x: root.checked ? 24px : 4px;
+            y: 4px;
+            width: 12px;
+            height: 12px;
+            border-radius: 6px;
+            background: root.enabled && root.checked ? Theme.on-accent : Theme.text-muted;
+            animate x { duration: 150ms; }
+        }
+    }
+    label := Text {
+        x: 50px;
+        width: root.width - 50px;
+        height: root.height;
+        text: root.text;
+        color: root.enabled ? Theme.text : Theme.text-muted;
+        font-size: 12px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { key-focus.focus(); root.checked = !root.checked; root.toggled(); }
+    }
+}
+
+export component FieldLabel inherits Text {
+    min-width: 0px;
+    font-size: 12px;
+    color: Theme.text-muted;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+export component SectionHeader inherits Rectangle {
+    in property <string> title;
+    height: 34px;
+    background: Theme.header-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+    Text {
+        x: 12px;
+        width: parent.width - 24px;
+        height: parent.height;
+        text: root.title;
+        font-size: 12px;
+        font-weight: 700;
+        color: Theme.text;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}

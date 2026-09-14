@@ -1,9 +1,9 @@
 use crate::{
-    auth_flow::ensure_github_token,
     auth_flow::ensure_copilot_token,
+    auth_flow::ensure_github_token,
     errors::ApiResult,
     paths::get_paths,
-    services::{github::get_copilot_usage, copilot::get_models},
+    services::{copilot::get_models, github::get_copilot_usage},
     state::AppState,
     token_store::read_github_token,
 };
@@ -19,7 +19,10 @@ pub async fn run_debug(json: bool) -> ApiResult<()> {
     });
 
     let paths = get_paths()?;
-    let token_exists = read_github_token().await?.map(|t| !t.trim().is_empty()).unwrap_or(false);
+    let token_exists = read_github_token()
+        .await?
+        .map(|t| !t.trim().is_empty())
+        .unwrap_or(false);
 
     let info = serde_json::json!({
         "version": version,
@@ -32,7 +35,10 @@ pub async fn run_debug(json: bool) -> ApiResult<()> {
     });
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".to_string()));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".to_string())
+        );
     } else {
         println!(
             "copilot-api-rs debug\n\nVersion: {}\nRuntime: {} {} ({} {})\n\nPaths:\n- APP_DIR: {}\n- GITHUB_TOKEN_PATH: {}\n\nToken exists: {}",
@@ -68,12 +74,25 @@ pub async fn run_check_usage(state: &AppState) -> ApiResult<()> {
     let snapshots = usage.get("quota_snapshots").and_then(|v| v.as_object());
 
     let format_quota = |name: &str| -> String {
-        if let Some(map) = snapshots.and_then(|s| s.get(name)).and_then(|v| v.as_object()) {
-            let entitlement = map.get("entitlement").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        if let Some(map) = snapshots
+            .and_then(|s| s.get(name))
+            .and_then(|v| v.as_object())
+        {
+            let entitlement = map
+                .get("entitlement")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
             let remaining = map.get("remaining").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let percent_remaining = map.get("percent_remaining").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let percent_remaining = map
+                .get("percent_remaining")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
             let used = entitlement - remaining;
-            let percent_used = if entitlement > 0.0 { (used / entitlement) * 100.0 } else { 0.0 };
+            let percent_used = if entitlement > 0.0 {
+                (used / entitlement) * 100.0
+            } else {
+                0.0
+            };
             return format!(
                 "{}: {}/{} used ({:.1}% used, {:.1}% remaining)",
                 name,
@@ -108,7 +127,12 @@ pub async fn run_claude_code_helper(state: &AppState, server_url: &str) -> ApiRe
     }
 
     let models = state.config.read().await.models.clone().unwrap();
-    let model_ids: Vec<String> = models.data.iter().map(|m| m.id.clone()).collect();
+    let model_ids: Vec<String> = models
+        .data
+        .iter()
+        .filter(|model| model.id.starts_with("claude-"))
+        .map(|model| model.id.clone())
+        .collect();
 
     if model_ids.is_empty() {
         println!("No models available for Claude Code helper.");
@@ -132,42 +156,75 @@ pub async fn run_claude_code_helper(state: &AppState, server_url: &str) -> ApiRe
     let model = &model_ids[selected];
     let small_model = &model_ids[selected_small];
 
-    let envs = vec![
-        ("ANTHROPIC_BASE_URL", server_url.to_string()),
-        ("ANTHROPIC_AUTH_TOKEN", "dummy".to_string()),
-        ("ANTHROPIC_MODEL", model.to_string()),
-        ("ANTHROPIC_DEFAULT_SONNET_MODEL", model.to_string()),
-        ("ANTHROPIC_SMALL_FAST_MODEL", small_model.to_string()),
-        ("ANTHROPIC_DEFAULT_HAIKU_MODEL", small_model.to_string()),
-        ("DISABLE_NON_ESSENTIAL_MODEL_CALLS", "1".to_string()),
-        ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1".to_string()),
-    ];
-
-    let bash_cmd = envs
-        .iter()
-        .map(|(k, v)| format!("export {}=\"{}\"", k, v))
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\nclaude\n";
-
-    let ps_cmd = envs
-        .iter()
-        .map(|(k, v)| format!("$env:{}=\"{}\"", k, v))
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\nclaude\n";
+    let (bash_cmd, ps_cmd) = claude_environment_commands(
+        server_url,
+        model,
+        small_model,
+        state.config.read().await.api_key.is_some(),
+    );
 
     if std::env::var("COPILOT_CLIPBOARD")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
+        && let Ok(mut clipboard) = arboard::Clipboard::new()
     {
-        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-            let _ = clipboard.set_text(ps_cmd.clone());
-        }
+        let _ = clipboard.set_text(ps_cmd.clone());
     }
 
     println!("\nClaude Code environment (bash/zsh):\n{}", bash_cmd);
     println!("Claude Code environment (PowerShell):\n{}", ps_cmd);
 
     Ok(())
+}
+
+fn claude_environment_commands(
+    server_url: &str,
+    model: &str,
+    small_model: &str,
+    authenticated: bool,
+) -> (String, String) {
+    let values = [
+        ("ANTHROPIC_BASE_URL", server_url),
+        ("ANTHROPIC_MODEL", model),
+        ("ANTHROPIC_DEFAULT_SONNET_MODEL", model),
+        ("ANTHROPIC_DEFAULT_HAIKU_MODEL", small_model),
+        ("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1"),
+    ];
+    let mut bash = values
+        .iter()
+        .map(|(name, value)| format!("export {name}='{}'", value.replace('\'', "'\"'\"'")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut powershell = values
+        .iter()
+        .map(|(name, value)| format!("$env:{name}='{}'", value.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if authenticated {
+        bash.push_str("\nexport ANTHROPIC_AUTH_TOKEN=\"$COPILOT_API_KEY\"");
+        powershell.push_str("\n$env:ANTHROPIC_AUTH_TOKEN=$env:COPILOT_API_KEY");
+    } else {
+        bash.push_str("\nexport ANTHROPIC_AUTH_TOKEN='local-only'");
+        powershell.push_str("\n$env:ANTHROPIC_AUTH_TOKEN='local-only'");
+    }
+    bash.push_str("\nclaude\n");
+    powershell.push_str("\nclaude\n");
+    (bash, powershell)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn helper_commands_quote_untrusted_model_names() {
+        let (bash, powershell) = super::claude_environment_commands(
+            "http://127.0.0.1:4141",
+            "claude-$(fixture)'value",
+            "claude-haiku-4-5",
+            true,
+        );
+        assert!(powershell.contains("'claude-$(fixture)''value'"));
+        assert!(powershell.contains("$env:ANTHROPIC_AUTH_TOKEN=$env:COPILOT_API_KEY"));
+        assert!(bash.contains("'claude-$(fixture)'\"'\"'value'"));
+        assert!(!powershell.contains("dummy"));
+    }
 }

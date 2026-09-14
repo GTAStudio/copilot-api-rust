@@ -2,22 +2,35 @@
 name = "copilot-api-gui"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.92"
 authors = ["Jason Liang"]
 description = "A Windows GUI for copilot-api with embedded server"
 license = "MIT"
 
 [dependencies]
-slint = { version = "1.14", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "compat-1-2"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-directories = "5"
-arboard = "3"
-ureq = { version = "2", features = ["json"] }
-flate2 = "1"
+slint = { version = "=1.17.1", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "compat-1-2"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+directories = "6.0.0"
+arboard = { version = "3.6.1", default-features = false }
+ureq = { version = "3.4.2", features = ["json"] }
+flate2 = "1.1.10"
+url = "2.5.8"
+tempfile = "3.27.0"
+sha2 = "0.11.0"
+open = "5.4.4"
+process-wrap = { version = "10.0.0", default-features = false, features = ["std", "creation-flags", "job-object", "process-group"] }
 
 [target.'cfg(windows)'.dependencies]
-winreg = "0.52"
+winreg = "0.56.0"
+windows = { version = "0.62.2", features = ["Win32_System_Threading"] }
 
 [build-dependencies]
-slint-build = "1.14"
-flate2 = "1"
+slint-build = "=1.17.1"
+flate2 = "1.1.10"
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }
+winresource = "0.1"
+
+[dev-dependencies]
+i-slint-backend-testing = { version = "=1.17.1", features = ["renderer-software"] }
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }

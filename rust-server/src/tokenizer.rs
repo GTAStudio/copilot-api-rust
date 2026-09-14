@@ -55,6 +55,16 @@ pub fn estimate_chat_tokens(payload: &ChatCompletionsPayload, tokenizer: &str) -
         tokens += message_tokens(message, encoder, constants);
     }
 
+    if let Some(tools) = &payload.tools
+        && !tools.is_empty()
+    {
+        for tool in tools {
+            let definition = serde_json::to_string(tool).unwrap_or_default();
+            tokens += constants.func_init + encoder.encode_ordinary(&definition).len();
+        }
+        tokens += constants.func_end;
+    }
+
     // every reply is primed with <|start|>assistant<|message|>
     tokens += 3;
     tokens as u64
@@ -77,10 +87,13 @@ fn message_tokens(message: &Message, encoder: &CoreBPE, constants: TokenConstant
                         if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
                             tokens += encoder.encode_ordinary(text).len();
                         }
-                    } else if kind == "image_url" {
-                        if let Some(url) = part.get("image_url").and_then(|v| v.get("url")).and_then(|v| v.as_str()) {
-                            tokens += encoder.encode_ordinary(url).len() + 85;
-                        }
+                    } else if kind == "image_url"
+                        && let Some(url) = part
+                            .get("image_url")
+                            .and_then(|v| v.get("url"))
+                            .and_then(|v| v.as_str())
+                    {
+                        tokens += encoder.encode_ordinary(url).len() + 85;
                     }
                 }
             }
@@ -95,7 +108,11 @@ fn message_tokens(message: &Message, encoder: &CoreBPE, constants: TokenConstant
     tokens
 }
 
-fn tool_calls_tokens(tool_calls: &Vec<ToolCall>, encoder: &CoreBPE, constants: TokenConstants) -> usize {
+fn tool_calls_tokens(
+    tool_calls: &Vec<ToolCall>,
+    encoder: &CoreBPE,
+    constants: TokenConstants,
+) -> usize {
     let mut tokens = 0;
     for tool_call in tool_calls {
         tokens += constants.func_init;
@@ -114,7 +131,7 @@ pub fn use_precise_tokenizer() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{estimate_chat_tokens, encoder_from_tokenizer};
+    use super::{encoder_from_tokenizer, estimate_chat_tokens};
     use crate::services::copilot::{ChatCompletionsPayload, Message};
 
     #[test]
@@ -123,8 +140,38 @@ mod tests {
     }
 
     #[test]
+    fn estimates_all_supported_encodings_and_tool_definitions() {
+        let base = serde_json::json!({"model": "gpt-4", "messages": [
+            {"role": "user", "name": "fixture", "content": [{"type": "text", "text": "hello"}, {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}]},
+            {"role": "assistant", "tool_calls": [{"id": "call_fixture", "type": "function", "function": {"name": "weather", "arguments": "{}"}}]}
+        ]});
+        for tokenizer in [
+            "o200k_base",
+            "cl100k_base",
+            "p50k_base",
+            "p50k_edit",
+            "r50k_base",
+            "unknown",
+        ] {
+            let payload: ChatCompletionsPayload =
+                serde_json::from_value(base.clone()).expect("payload");
+            let count = estimate_chat_tokens(&payload, tokenizer);
+            assert!(count > 85, "image and text overhead");
+            let mut with_tools = base.clone();
+            with_tools["tools"] = serde_json::json!([{"type": "function", "function": {"name": "weather", "description": "return weather for a city", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}}]);
+            let payload: ChatCompletionsPayload =
+                serde_json::from_value(with_tools).expect("tool payload");
+            assert!(
+                estimate_chat_tokens(&payload, tokenizer) > count,
+                "tool schema must count towards context"
+            );
+        }
+    }
+
+    #[test]
     fn estimates_tokens_for_simple_payload() {
         let payload = ChatCompletionsPayload {
+            extra: serde_json::Map::new(),
             model: "gpt-5.2-codex".to_string(),
             messages: vec![Message {
                 role: "user".to_string(),

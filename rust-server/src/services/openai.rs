@@ -5,8 +5,7 @@ fn openai_base_url() -> String {
 }
 
 fn openai_api_key() -> ApiResult<String> {
-    std::env::var("OPENAI_API_KEY")
-        .map_err(|_| ApiError::BadRequest("Missing OPENAI_API_KEY".to_string()))
+    crate::utils::required_api_key("OPENAI_API_KEY")
 }
 
 pub async fn create_chat_completions(
@@ -14,7 +13,7 @@ pub async fn create_chat_completions(
     payload: &serde_json::Value,
 ) -> ApiResult<reqwest::Response> {
     let key = openai_api_key()?;
-    let url = format!("{}/chat/completions", openai_base_url());
+    let url = crate::utils::api_url(&openai_base_url(), "chat/completions")?;
     let resp = client
         .post(url)
         .bearer_auth(key)
@@ -23,12 +22,7 @@ pub async fn create_chat_completions(
         .await
         .map_err(|e| ApiError::Upstream(format!("OpenAI chat completions failed: {e}")))?;
 
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(ApiError::Upstream(format!("OpenAI chat completions failed: {text}")));
-    }
-
-    Ok(resp)
+    crate::errors::check_upstream(resp).await
 }
 
 pub async fn create_responses(
@@ -36,7 +30,7 @@ pub async fn create_responses(
     payload: &serde_json::Value,
 ) -> ApiResult<reqwest::Response> {
     let key = openai_api_key()?;
-    let url = format!("{}/responses", openai_base_url());
+    let url = crate::utils::api_url(&openai_base_url(), "responses")?;
     let resp = client
         .post(url)
         .bearer_auth(key)
@@ -45,12 +39,7 @@ pub async fn create_responses(
         .await
         .map_err(|e| ApiError::Upstream(format!("OpenAI responses failed: {e}")))?;
 
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(ApiError::Upstream(format!("OpenAI responses failed: {text}")));
-    }
-
-    Ok(resp)
+    crate::errors::check_upstream(resp).await
 }
 
 pub async fn create_embeddings(
@@ -58,7 +47,7 @@ pub async fn create_embeddings(
     payload: &serde_json::Value,
 ) -> ApiResult<reqwest::Response> {
     let key = openai_api_key()?;
-    let url = format!("{}/embeddings", openai_base_url());
+    let url = crate::utils::api_url(&openai_base_url(), "embeddings")?;
     let resp = client
         .post(url)
         .bearer_auth(key)
@@ -67,17 +56,12 @@ pub async fn create_embeddings(
         .await
         .map_err(|e| ApiError::Upstream(format!("OpenAI embeddings failed: {e}")))?;
 
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(ApiError::Upstream(format!("OpenAI embeddings failed: {text}")));
-    }
-
-    Ok(resp)
+    crate::errors::check_upstream(resp).await
 }
 
 pub async fn list_models(client: &reqwest::Client) -> ApiResult<serde_json::Value> {
     let key = openai_api_key()?;
-    let url = format!("{}/models", openai_base_url());
+    let url = crate::utils::api_url(&openai_base_url(), "models")?;
     let resp = client
         .get(url)
         .bearer_auth(key)
@@ -85,12 +69,9 @@ pub async fn list_models(client: &reqwest::Client) -> ApiResult<serde_json::Valu
         .await
         .map_err(|e| ApiError::Upstream(format!("OpenAI models failed: {e}")))?;
 
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(ApiError::Upstream(format!("OpenAI models failed: {text}")));
-    }
-
-    resp.json::<serde_json::Value>()
+    crate::errors::check_upstream(resp)
+        .await?
+        .json::<serde_json::Value>()
         .await
         .map_err(|e| ApiError::Upstream(format!("Invalid OpenAI models response: {e}")))
 }

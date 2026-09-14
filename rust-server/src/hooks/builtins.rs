@@ -4,11 +4,15 @@ use std::path::PathBuf;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
-use crate::errors::ApiResult;
-use crate::hooks::{claude_paths, types::{HookInput, HookResult}};
 use crate::errors::ApiError;
+use crate::errors::ApiResult;
+use crate::hooks::{
+    claude_paths,
+    types::{HookInput, HookResult},
+};
 
 pub fn run_builtin(name: &str, input: &HookInput) -> ApiResult<HookResult> {
+    input.validate()?;
     match name {
         "session_start" => session_start(),
         "session_end" => session_end(input),
@@ -22,7 +26,7 @@ pub fn run_builtin(name: &str, input: &HookInput) -> ApiResult<HookResult> {
         "tmux_reminder" => tmux_reminder(),
         "git_push_reminder" => git_push_reminder(),
         "pr_create_notice" => pr_create_notice(input),
-        _ => Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: format!("[Hook] Unknown builtin: {}", name) }),
+        _ => Err(ApiError::BadRequest("Unknown builtin hook".to_string())),
     }
 }
 
@@ -37,15 +41,15 @@ fn session_start() -> ApiResult<HookResult> {
     let cutoff = Local::now() - Duration::days(7);
     let mut recent = Vec::new();
     for entry in WalkDir::new(&sessions_dir).max_depth(1) {
-        let entry = entry.map_err(|e| ApiError::Internal(format!("Failed to read sessions dir: {e}")))?;
-        if entry.file_type().is_file() {
-            if let Ok(metadata) = entry.metadata() {
-                if let Ok(modified) = metadata.modified() {
-                    let modified: chrono::DateTime<Local> = modified.into();
-                    if modified > cutoff {
-                        recent.push(entry.path().to_path_buf());
-                    }
-                }
+        let entry =
+            entry.map_err(|e| ApiError::Internal(format!("Failed to read sessions dir: {e}")))?;
+        if entry.file_type().is_file()
+            && let Ok(metadata) = entry.metadata()
+            && let Ok(modified) = metadata.modified()
+        {
+            let modified: chrono::DateTime<Local> = modified.into();
+            if modified > cutoff {
+                recent.push(entry.path().to_path_buf());
             }
         }
     }
@@ -54,84 +58,174 @@ fn session_start() -> ApiResult<HookResult> {
         .max_depth(2)
         .into_iter()
         .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file() && e.path().extension().map(|e| e == "md").unwrap_or(false))
+        .filter(|e| {
+            e.file_type().is_file() && e.path().extension().map(|e| e == "md").unwrap_or(false)
+        })
         .count();
 
     let mut stderr = String::new();
     if !recent.is_empty() {
-        stderr.push_str(&format!("[SessionStart] Found {} recent session(s)\n", recent.len()));
-        stderr.push_str(&format!("[SessionStart] Latest: {}\n", recent.last().unwrap().display()));
+        stderr.push_str(&format!(
+            "[SessionStart] Found {} recent session(s)\n",
+            recent.len()
+        ));
+        stderr.push_str(&format!(
+            "[SessionStart] Latest: {}\n",
+            recent.last().unwrap().display()
+        ));
     }
     if learned_count > 0 {
-        stderr.push_str(&format!("[SessionStart] {} learned skill(s) available\n", learned_count));
+        stderr.push_str(&format!(
+            "[SessionStart] {} learned skill(s) available\n",
+            learned_count
+        ));
     }
 
-    Ok(HookResult { exit_code: 0, stdout: String::new(), stderr })
+    Ok(HookResult {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr,
+    })
 }
 
 fn session_end(input: &HookInput) -> ApiResult<HookResult> {
     let sessions_dir = claude_paths::sessions_dir()?;
     std::fs::create_dir_all(&sessions_dir)
         .map_err(|e| ApiError::Internal(format!("Failed to create sessions dir: {e}")))?;
-    let session_id = input.resolved_session_id().unwrap_or_else(|| Uuid::new_v4().to_string());
-    let short = session_id.chars().take(8).collect::<String>();
+    let session_id = input
+        .resolved_session_id()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let date = Local::now().format("%Y-%m-%d").to_string();
-    let path = sessions_dir.join(format!("{}-{}-session.tmp", date, short));
+    let path = sessions_dir.join(format!("{}-{}-session.tmp", date, session_id));
     let payload = serde_json::json!({
         "session_id": session_id,
         "ended_at": Utc::now().to_rfc3339(),
     });
-    std::fs::write(&path, serde_json::to_string_pretty(&payload).unwrap_or_default())
-        .map_err(|e| ApiError::Internal(format!("Failed to write session file: {e}")))?;
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&payload).unwrap_or_default(),
+    )
+    .map_err(|e| ApiError::Internal(format!("Failed to write session file: {e}")))?;
 
-    Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: format!("[SessionEnd] Saved {}", path.display()) })
+    Ok(HookResult {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr: format!("[SessionEnd] Saved {}", path.display()),
+    })
 }
 
 fn pre_compact(input: &HookInput) -> ApiResult<HookResult> {
     let sessions_dir = claude_paths::sessions_dir()?;
     std::fs::create_dir_all(&sessions_dir)
         .map_err(|e| ApiError::Internal(format!("Failed to create sessions dir: {e}")))?;
-    let session_id = input.resolved_session_id().unwrap_or_else(|| Uuid::new_v4().to_string());
+    let session_id = input
+        .resolved_session_id()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let path = sessions_dir.join(format!("pre-compact-{}.json", session_id));
     let payload = serde_json::json!({
         "session_id": session_id,
         "timestamp": Utc::now().to_rfc3339(),
         "tool": input.tool,
     });
-    std::fs::write(&path, serde_json::to_string_pretty(&payload).unwrap_or_default())
-        .map_err(|e| ApiError::Internal(format!("Failed to write pre-compact file: {e}")))?;
-    Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: format!("[PreCompact] Saved {}", path.display()) })
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&payload).unwrap_or_default(),
+    )
+    .map_err(|e| ApiError::Internal(format!("Failed to write pre-compact file: {e}")))?;
+    Ok(HookResult {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr: format!("[PreCompact] Saved {}", path.display()),
+    })
 }
 
 fn suggest_compact(input: &HookInput) -> ApiResult<HookResult> {
-    let session_id = input.resolved_session_id().unwrap_or_else(|| "default".to_string());
-    let threshold = std::env::var("COMPACT_THRESHOLD").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(50);
+    let session_id = input
+        .resolved_session_id()
+        .unwrap_or_else(|| "default".to_string());
+    let threshold = std::env::var("COMPACT_THRESHOLD")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(50);
     let reminder_every = 25u32;
 
-    let counter_path = std::env::temp_dir().join(format!("claude-tool-count-{}", session_id));
-    let current = std::fs::read_to_string(&counter_path).ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
-    let next = current.saturating_add(1);
-    let _ = std::fs::write(&counter_path, next.to_string());
+    let directory = claude_paths::claude_root_dir()?.join("counters");
+    std::fs::create_dir_all(&directory)
+        .map_err(|_| ApiError::Internal("Failed to create counter directory".to_string()))?;
+    let next = increment_counter(&directory.join(session_id))?;
 
     let mut stderr = String::new();
-    if next >= threshold && (next - threshold) % reminder_every == 0 {
+    if next >= threshold && (next - threshold).is_multiple_of(reminder_every) {
         stderr.push_str("[Hook] Consider /compact to keep context focused\n");
     }
 
-    Ok(HookResult { exit_code: 0, stdout: String::new(), stderr })
+    Ok(HookResult {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr,
+    })
+}
+
+fn increment_counter(path: &std::path::Path) -> ApiResult<u32> {
+    use std::io::{Read, Seek, Write};
+    let operation = || -> std::io::Result<u32> {
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
+        file.lock()?;
+        let mut content = String::new();
+        Read::by_ref(&mut file)
+            .take(32)
+            .read_to_string(&mut content)?;
+        let count = if content.trim().is_empty() {
+            0
+        } else {
+            content.trim().parse::<u32>().map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid tool counter")
+            })?
+        };
+        let next = count.saturating_add(1);
+        let text = next.to_string();
+        file.rewind()?;
+        file.write_all(text.as_bytes())?;
+        file.set_len(text.len() as u64)?;
+        file.sync_all()?;
+        Ok(next)
+    };
+    operation().map_err(|_| ApiError::Internal("Failed to update tool counter".to_string()))
 }
 
 fn evaluate_session(input: &HookInput) -> ApiResult<HookResult> {
-    let min_len = std::env::var("CLAUDE_MIN_SESSION_MESSAGES").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(8);
-    let path = std::env::var("CLAUDE_TRANSCRIPT_PATH").ok().map(PathBuf::from);
+    let min_len = std::env::var("CLAUDE_MIN_SESSION_MESSAGES")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(8);
+    let path = std::env::var("CLAUDE_TRANSCRIPT_PATH")
+        .ok()
+        .map(PathBuf::from);
     let Some(path) = path else {
-        return Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: "[Evaluate] No transcript path".to_string() });
+        return Ok(HookResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: "[Evaluate] No transcript path".to_string(),
+        });
     };
     let Ok(content) = std::fs::read_to_string(&path) else {
-        return Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: "[Evaluate] Transcript not readable".to_string() });
+        return Ok(HookResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: "[Evaluate] Transcript not readable".to_string(),
+        });
     };
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: "[Evaluate] Transcript invalid JSON".to_string() });
+        return Ok(HookResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: "[Evaluate] Transcript invalid JSON".to_string(),
+        });
     };
 
     let mut user_messages = 0u32;
@@ -144,50 +238,92 @@ fn evaluate_session(input: &HookInput) -> ApiResult<HookResult> {
     }
 
     if user_messages < min_len {
-        return Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: "[Evaluate] Session too short".to_string() });
+        return Ok(HookResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: "[Evaluate] Session too short".to_string(),
+        });
     }
 
     let learned_dir = claude_paths::learned_skills_dir()?;
     std::fs::create_dir_all(&learned_dir)
         .map_err(|e| ApiError::Internal(format!("Failed to create learned dir: {e}")))?;
-    let session_id = input.resolved_session_id().unwrap_or_else(|| Uuid::new_v4().to_string());
-    let file = learned_dir.join(format!("learned-{}-{}.md", Local::now().format("%Y-%m-%d"), &session_id[..8.min(session_id.len())]));
-    let body = format!("# Learned Pattern\n\n- session_id: {}\n- user_messages: {}\n- extracted_at: {}\n", session_id, user_messages, Utc::now().to_rfc3339());
+    let session_id = input
+        .resolved_session_id()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let file = learned_dir.join(format!(
+        "learned-{}-{}.md",
+        Local::now().format("%Y-%m-%d"),
+        session_id
+    ));
+    let body = format!(
+        "# Learned Pattern\n\n- session_id: {}\n- user_messages: {}\n- extracted_at: {}\n",
+        session_id,
+        user_messages,
+        Utc::now().to_rfc3339()
+    );
     std::fs::write(&file, body)
         .map_err(|e| ApiError::Internal(format!("Failed to write learned file: {e}")))?;
 
-    Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: format!("[Evaluate] Learned pattern saved: {}", file.display()) })
+    Ok(HookResult {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr: format!("[Evaluate] Learned pattern saved: {}", file.display()),
+    })
 }
 
 fn check_console_log() -> ApiResult<HookResult> {
     let mut stderr = String::new();
     let output = std::process::Command::new("git")
-        .args(["diff", "--name-only"]) 
+        .args(["diff", "--name-only"])
         .output();
 
     let Ok(output) = output else {
-        return Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: "[Hook] git not available".to_string() });
+        return Ok(HookResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: "[Hook] git not available".to_string(),
+        });
     };
     let files = String::from_utf8_lossy(&output.stdout);
     for file in files.lines() {
-        if !is_script_file(file) { continue; }
-        if let Ok(content) = std::fs::read_to_string(file) {
-            if content.contains("console.log") {
-                stderr.push_str(&format!("[Hook] console.log found: {}\n", file));
-            }
+        if !is_script_file(file) {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(file)
+            && content.contains("console.log")
+        {
+            stderr.push_str(&format!("[Hook] console.log found: {}\n", file));
         }
     }
 
-    Ok(HookResult { exit_code: 0, stdout: String::new(), stderr })
+    Ok(HookResult {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr,
+    })
 }
 
 fn warn_console_log(input: &HookInput) -> ApiResult<HookResult> {
-    let path = input.tool_input.as_ref().and_then(|v| v.get("file_path")).and_then(|v| v.as_str()).unwrap_or("");
+    let path = input
+        .tool_input
+        .as_ref()
+        .and_then(|v| v.get("file_path"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if path.is_empty() {
-        return Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: String::new() });
+        return Ok(HookResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
     }
     let Ok(content) = std::fs::read_to_string(path) else {
-        return Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: String::new() });
+        return Ok(HookResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
     };
     let mut lines = Vec::new();
     for (idx, line) in content.lines().enumerate() {
@@ -202,20 +338,36 @@ fn warn_console_log(input: &HookInput) -> ApiResult<HookResult> {
             stderr.push_str(&format!("{}\n", line));
         }
     }
-    Ok(HookResult { exit_code: 0, stdout: String::new(), stderr })
+    Ok(HookResult {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr,
+    })
 }
 
 fn block_doc_creation(input: &HookInput) -> ApiResult<HookResult> {
-    let path = input.tool_input.as_ref().and_then(|v| v.get("file_path")).and_then(|v| v.as_str()).unwrap_or("");
+    let path = input
+        .tool_input
+        .as_ref()
+        .and_then(|v| v.get("file_path"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let allow = Regex::new(r"(README|CLAUDE|AGENTS|CONTRIBUTING)\.md$").unwrap();
     if (path.ends_with(".md") || path.ends_with(".txt")) && !allow.is_match(path) {
         return Ok(HookResult {
             exit_code: 1,
             stdout: String::new(),
-            stderr: format!("[Hook] BLOCKED: Unnecessary documentation file creation: {}", path),
+            stderr: format!(
+                "[Hook] BLOCKED: Unnecessary documentation file creation: {}",
+                path
+            ),
         });
     }
-    Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: String::new() })
+    Ok(HookResult {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+    })
 }
 
 fn tmux_dev_block() -> ApiResult<HookResult> {
@@ -226,7 +378,11 @@ fn tmux_dev_block() -> ApiResult<HookResult> {
             stderr: "[Hook] BLOCKED: Dev server should run in tmux".to_string(),
         });
     }
-    Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: String::new() })
+    Ok(HookResult {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+    })
 }
 
 fn tmux_reminder() -> ApiResult<HookResult> {
@@ -237,11 +393,19 @@ fn tmux_reminder() -> ApiResult<HookResult> {
             stderr: "[Hook] Consider running in tmux for session persistence".to_string(),
         });
     }
-    Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: String::new() })
+    Ok(HookResult {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+    })
 }
 
 fn git_push_reminder() -> ApiResult<HookResult> {
-    Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: "[Hook] Review changes before push".to_string() })
+    Ok(HookResult {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr: "[Hook] Review changes before push".to_string(),
+    })
 }
 
 fn pr_create_notice(input: &HookInput) -> ApiResult<HookResult> {
@@ -250,11 +414,226 @@ fn pr_create_notice(input: &HookInput) -> ApiResult<HookResult> {
     let re = Regex::new(r"https://github.com/[^/]+/[^/]+/pull/\d+").unwrap();
     if let Some(m) = re.find(output_text) {
         let url = m.as_str();
-        return Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: format!("[Hook] PR created: {}", url) });
+        return Ok(HookResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: format!("[Hook] PR created: {}", url),
+        });
     }
-    Ok(HookResult { exit_code: 0, stdout: String::new(), stderr: String::new() })
+    Ok(HookResult {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+    })
 }
 
 fn is_script_file(file: &str) -> bool {
-    file.ends_with(".js") || file.ends_with(".jsx") || file.ends_with(".ts") || file.ends_with(".tsx")
+    file.ends_with(".js")
+        || file.ends_with(".jsx")
+        || file.ends_with(".ts")
+        || file.ends_with(".tsx")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_file_lifecycle_and_concurrent_counts_are_isolated() {
+        let root =
+            tempfile::tempdir_in(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target"))
+                .expect("hook directory");
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "hooks::builtins::tests::builtin_files_fixture",
+                "--nocapture",
+            ])
+            .env("COPILOT_HOOK_FILES_FIXTURE", "1")
+            .env("CLAUDE_CONFIG_DIR", root.path())
+            .env(
+                "CLAUDE_TRANSCRIPT_PATH",
+                root.path().join("transcript.json"),
+            )
+            .env("COMPACT_THRESHOLD", "1")
+            .env_remove("CLAUDE_SESSION_ID")
+            .env_remove("CLAUDE_MIN_SESSION_MESSAGES")
+            .current_dir(root.path())
+            .output()
+            .expect("hook fixture");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("BUILTIN_FILES_CONTRACT_PASSED"));
+    }
+
+    #[test]
+    fn builtin_files_fixture() {
+        if std::env::var("COPILOT_HOOK_FILES_FIXTURE").as_deref() != Ok("1") {
+            return;
+        }
+        let root = PathBuf::from(
+            std::env::var_os("CLAUDE_CONFIG_DIR").expect("isolated Claude directory"),
+        );
+        assert_eq!(
+            claude_paths::claude_root_dir().expect("root"),
+            root,
+            "never write real Claude files"
+        );
+        assert_eq!(
+            run_builtin("session_start", &HookInput::default())
+                .expect("empty start")
+                .exit_code,
+            0
+        );
+        for session in ["same-prefix-one", "same-prefix-two"] {
+            let input = HookInput {
+                session_id: Some(session.to_string()),
+                ..Default::default()
+            };
+            run_builtin("session_end", &input).expect("save distinct session");
+        }
+        let saved = std::fs::read_dir(claude_paths::sessions_dir().expect("sessions path"))
+            .expect("sessions")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("session entries");
+        assert_eq!(
+            saved.len(),
+            2,
+            "session names must not collide on their first eight characters"
+        );
+        let input = HookInput {
+            session_id: Some("counter-fixture".to_string()),
+            tool: Some("Edit".to_string()),
+            ..Default::default()
+        };
+        run_builtin("pre_compact", &input).expect("precompact");
+        assert!(
+            root.join("sessions/pre-compact-counter-fixture.json")
+                .is_file()
+        );
+        let transcript = root.join("transcript.json");
+        assert!(
+            run_builtin("evaluate_session", &input)
+                .expect("missing transcript")
+                .stderr
+                .contains("not readable")
+        );
+        std::fs::write(&transcript, "invalid JSON").expect("invalid transcript");
+        assert!(
+            run_builtin("evaluate_session", &input)
+                .expect("invalid transcript")
+                .stderr
+                .contains("invalid JSON")
+        );
+        std::fs::write(&transcript, "{\"messages\":[]}").expect("short transcript");
+        assert!(
+            run_builtin("evaluate_session", &input)
+                .expect("short transcript")
+                .stderr
+                .contains("too short")
+        );
+        let messages = vec![serde_json::json!({"role": "user", "content": "fixture"}); 8];
+        std::fs::write(
+            &transcript,
+            serde_json::json!({"messages": messages}).to_string(),
+        )
+        .expect("transcript");
+        assert!(
+            run_builtin("evaluate_session", &input)
+                .expect("evaluate")
+                .stderr
+                .contains("saved")
+        );
+        assert!(
+            run_builtin("session_start", &input)
+                .expect("populated start")
+                .stderr
+                .contains("learned skill")
+        );
+        let mut threads = Vec::new();
+        for _ in 0..16 {
+            let input = input.clone();
+            threads.push(std::thread::spawn(move || {
+                for _ in 0..8 {
+                    run_builtin("suggest_compact", &input).expect("count tool call");
+                }
+            }));
+        }
+        for thread in threads {
+            thread.join().expect("counter worker");
+        }
+        let count = std::fs::read_to_string(root.join("counters/counter-fixture"))
+            .expect("isolated counter");
+        assert_eq!(count.trim(), "128");
+        let script = root.join("fixture.ts");
+        std::fs::write(&script, "console.log('fixture');\n").expect("script fixture");
+        let input = HookInput {
+            tool_input: Some(serde_json::json!({"file_path": script})),
+            ..input
+        };
+        assert!(
+            run_builtin("warn_console_log", &input)
+                .expect("script warning")
+                .stderr
+                .contains("console.log")
+        );
+        println!("BUILTIN_FILES_CONTRACT_PASSED");
+    }
+
+    #[test]
+    fn builtin_policies_and_notices_have_expected_results() {
+        let base = HookInput::default();
+        assert_eq!(
+            run_builtin("git_push_reminder", &base)
+                .expect("push notice")
+                .exit_code,
+            0
+        );
+        assert!(
+            run_builtin("warn_console_log", &base)
+                .expect("no file")
+                .stderr
+                .is_empty()
+        );
+        for (path, expected) in [
+            ("README.md", 0),
+            ("CLAUDE.md", 0),
+            ("notes.md", 1),
+            ("fixture.rs", 0),
+        ] {
+            let input = HookInput {
+                tool_input: Some(serde_json::json!({"file_path": path})),
+                ..Default::default()
+            };
+            assert_eq!(
+                run_builtin("block_doc_creation", &input)
+                    .expect("policy")
+                    .exit_code,
+                expected
+            );
+        }
+        let input = HookInput {
+            tool_output: Some(
+                serde_json::json!({"output": "https://github.com/example/fixture/pull/123"}),
+            ),
+            ..Default::default()
+        };
+        assert!(
+            run_builtin("pr_create_notice", &input)
+                .expect("PR notice")
+                .stderr
+                .contains("/pull/123")
+        );
+        assert!(
+            run_builtin("pr_create_notice", &base)
+                .expect("empty PR notice")
+                .stderr
+                .is_empty()
+        );
+        assert!(!is_script_file("fixture.rs"));
+    }
 }

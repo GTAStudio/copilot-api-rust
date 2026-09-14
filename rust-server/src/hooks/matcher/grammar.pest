@@ -1,8 +1,11 @@
 WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
 
+matcher = { SOI ~ expr ~ EOI }
 expr = { or_expr }
-or_expr = { and_expr ~ ( "||" ~ and_expr )* }
-and_expr = { not_expr ~ ( "&&" ~ not_expr )* }
+or_expr = { and_expr ~ ( or_op ~ and_expr )* }
+and_expr = { not_expr ~ ( and_op ~ not_expr )* }
+or_op = { "||" }
+and_op = { "&&" }
 not_expr = { neg? ~ primary }
 neg = { "!" }
 primary = { "(" ~ expr ~ ")" | predicate }

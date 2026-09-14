@@ -1,4 +1,7 @@
-use crate::{errors::{ApiError, ApiResult}, state::AppState};
+use crate::{
+    errors::{ApiError, ApiResult},
+    state::AppState,
+};
 use dialoguer::Confirm;
 
 pub async fn check_manual_approval(state: &AppState) -> ApiResult<()> {

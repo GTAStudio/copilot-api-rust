@@ -1,15 +1,28 @@
-import { Button, LineEdit, Switch, VerticalBox, HorizontalBox, ScrollView, ComboBox } from "std-widgets.slint";
+import { ScrollView, ComboBox, Palette } from "std-widgets.slint";
+import { Branding, Theme, Button, LineEdit, Switch, FieldLabel, SectionHeader } from "theme.slint";
+
+export { Branding, Theme }
 
 export component AppWindow inherits Window {
-    width: 1280px;
-    height: 900px;
-    title: "Copilot API GUI";
+    preferred-width: 1120px;
+    preferred-height: 800px;
+    min-width: 800px;
+    min-height: 620px;
+    title: "GTA Copilot API";
+    icon: Branding.app-icon;
     default-font-family: "Microsoft YaHei";
-    background: #f5f5f5;
+    default-font-size: 12px;
+    background: Theme.window-bg;
 
-    // Properties
+    out property <int> active-page: 0;
+    public function select-page(page: int) {
+        if page >= 0 && page < 5 { root.active-page = page; }
+    }
+    init => { Palette.color-scheme = ColorScheme.light; }
+
     in-out property <string> server_port: "4141";
     in-out property <string> account_type: "individual";
+    in-out property <string> provider: "auto";
     in-out property <string> claude_base_url: "http://localhost:4141";
     in-out property <string> github_token: "";
     in-out property <bool> use_proxy: false;
@@ -28,6 +41,7 @@ export component AppWindow inherits Window {
     in-out property <string> azure_api_key: "";
     in-out property <string> status_text: "Ready";
     in-out property <string> status_short: "Ready";
+    out property <string> localized-status: root.is_chinese ? root.translate_message(root.status_text) : root.status_text;
     in-out property <string> deps_summary: "";
     in-out property <string> deps_text: "";
     in-out property <string> deps_line1: "";
@@ -40,31 +54,27 @@ export component AppWindow inherits Window {
     in-out property <string> deps_line8: "";
     in-out property <string> github_device_code: "";
     in-out property <string> github_login_url: "https://github.com/login/device";
-
-    // Model selection
-    in-out property <[string]> available_models: ["claude-sonnet-4", "claude-opus-4.5", "gpt-5.2-codex", "gpt-5-mini", "gpt-5", "gpt-4o"];
-    in-out property <string> main_model: "claude-sonnet-4";
-    in-out property <string> fast_model: "gpt-5-mini";
+    in-out property <[string]> available_models: [];
+    in-out property <string> main_model: "claude-sonnet-4-6";
+    in-out property <string> fast_model: "claude-haiku-4-5";
     in-out property <int> main_model_index: 0;
     in-out property <int> fast_model_index: 3;
-
-    // Legacy properties
     in-out property <string> api_base_url: "";
     in-out property <string> api_key: "";
     in-out property <string> rate_limit_seconds: "";
     in-out property <bool> show_copilot_section: true;
     in-out property <bool> show_azure_section: false;
-    in-out property <bool> is_chinese: false;
+    in-out property <bool> is_chinese: true;
     in-out property <bool> server_running: false;
+    in-out property <bool> authenticating: false;
     in-out property <bool> installing: false;
     in-out property <bool> hooks_enabled: true;
     in-out property <string> hooks_config_path: "";
-    
-    // Log properties
     in-out property <string> log_text: "";
     in-out property <bool> show_log: true;
 
     callback save();
+    callback configure_claude();
     callback toggle_autostart(bool);
     callback start_server();
     callback stop_server();
@@ -76,464 +86,398 @@ export component AppWindow inherits Window {
     callback copy_log();
     callback clear_log();
     callback open_hooks_config();
+    callback language_changed(bool);
+    pure callback translate_message(string) -> string;
+    translate_message(message) => { return message; }
 
-    VerticalBox {
-        padding: 12px;
-        spacing: 10px;
-
-        HorizontalBox {
-            height: 52px;
-            Text {
-                text: "Copilot API GUI";
-                font-size: 20px;
-                font-weight: 700;
-                color: #222;
-                vertical-alignment: center;
-            }
-            Rectangle { horizontal-stretch: 1; min-width: 20px; }
-            Text {
-                text: root.status_short;
-                font-size: 11px;
-                color: #777;
-                vertical-alignment: center;
-                max-width: 400px;
-                overflow: elide;
-            }
-        }
-
-        ScrollView {
-            vertical-stretch: 1;
-            HorizontalBox {
-                spacing: 12px;
-
-            // ================= LEFT COLUMN =================
-                VerticalBox {
-                    horizontal-stretch: 1;
-                    spacing: 12px;
-
-                // Server Settings
-                Rectangle {
-                    background: white;
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: #e4e4e4;
-                    VerticalBox {
-                        padding: 12px;
-                        spacing: 8px;
-                        Text { text: "Server Settings"; font-size: 15px; font-weight: 600; color: #333; }
-
-                        HorizontalBox {
-                            spacing: 10px;
-                            VerticalBox {
-                                spacing: 4px;
-                                horizontal-stretch: 1;
-                                Text { text: "Port"; font-size: 12px; color: #666; }
-                                LineEdit { text <=> root.server_port; placeholder-text: "4141"; height: 30px; }
-                            }
-                            VerticalBox {
-                                spacing: 4px;
-                                horizontal-stretch: 2;
-                                Text { text: "Account Type"; font-size: 12px; color: #666; }
-                                LineEdit { text <=> root.account_type; placeholder-text: "individual / business / enterprise"; height: 30px; }
-                            }
-                        }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            Text { text: "Claude Base URL"; font-size: 12px; color: #666; }
-                            LineEdit { text <=> root.claude_base_url; placeholder-text: "http://localhost:4141"; height: 30px; }
-                            Text { text: "Used by Claude-compatible clients."; font-size: 10px; color: #888; }
-                        }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            Text { text: "GitHub Token (optional)"; font-size: 12px; color: #666; }
-                            LineEdit { text <=> root.github_token; placeholder-text: "ghp_xxx (PAT)"; input-type: password; height: 30px; }
-                            Text { text: "Leave blank to use device-code login. Code appears in terminal; open https://github.com/login/device"; font-size: 10px; color: #888; }
-                        }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            Text { text: "GitHub Device Code"; font-size: 12px; color: #666; }
-                            HorizontalBox {
-                                spacing: 8px;
-                                LineEdit { text <=> root.github_device_code; placeholder-text: "(appears after Start)"; read-only: true; height: 30px; horizontal-stretch: 1; }
-                                Button { text: "Copy"; clicked => { root.copy_device_code(); } }
-                            }
-                            Text { text: "Open this URL to authorize:"; font-size: 10px; color: #888; }
-                            HorizontalBox {
-                                spacing: 8px;
-                                LineEdit { text <=> root.github_login_url; read-only: true; height: 30px; horizontal-stretch: 1; }
-                                Button { text: "Copy"; clicked => { root.copy_login_url(); } }
-                            }
-                        }
-                    }
-                }
-
-                // Proxy Settings
-                Rectangle {
-                    background: white;
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: #e4e4e4;
-                    VerticalBox {
-                        padding: 12px;
-                        spacing: 8px;
-                        Text { text: "Proxy"; font-size: 15px; font-weight: 600; color: #333; }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            Text { text: "Use Proxy"; font-size: 12px; color: #333; }
-                            HorizontalBox {
-                                spacing: 8px;
-                                Switch { checked <=> root.use_proxy; horizontal-stretch: 0; }
-                                Text { text: "Enable when your network requires a local proxy."; font-size: 10px; color: #888; vertical-alignment: center; }
-                            }
-                        }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            opacity: root.use_proxy ? 1 : 0.5;
-                            Text { text: "Proxy Protocol"; font-size: 12px; color: #666; }
-                            LineEdit { text <=> root.proxy_scheme; placeholder-text: "http / socks5"; enabled: root.use_proxy; height: 30px; }
-                        }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            opacity: root.use_proxy ? 1 : 0.5;
-                            Text { text: "Proxy Host:Port"; font-size: 12px; color: #666; }
-                            LineEdit { text <=> root.proxy_url; placeholder-text: "127.0.0.1:7890"; enabled: root.use_proxy; height: 30px; }
-                        }
-
-                        HorizontalBox {
-                            spacing: 10px;
-                            opacity: root.use_proxy ? 1 : 0.5;
-                            VerticalBox {
-                                spacing: 4px;
-                                horizontal-stretch: 1;
-                                Text { text: "Proxy Username"; font-size: 12px; color: #666; }
-                                LineEdit { text <=> root.proxy_username; placeholder-text: "(optional)"; enabled: root.use_proxy; height: 30px; }
-                            }
-                            VerticalBox {
-                                spacing: 4px;
-                                horizontal-stretch: 1;
-                                Text { text: "Proxy Password"; font-size: 12px; color: #666; }
-                                LineEdit { text <=> root.proxy_password; placeholder-text: "(optional)"; input-type: password; enabled: root.use_proxy; height: 30px; }
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    background: white;
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: #e4e4e4;
-                    VerticalBox {
-                        padding: 12px;
-                        spacing: 8px;
-                        Text { text: "Dependencies"; font-size: 15px; font-weight: 600; color: #333; }
-                        Text { text: root.deps_summary; font-size: 12px; color: #555; }
-                        if root.deps_line1 != "": Text { text: root.deps_line1; font-size: 11px; color: #888; }
-                        if root.deps_line2 != "": Text { text: root.deps_line2; font-size: 11px; color: #888; }
-                        if root.deps_line3 != "": Text { text: root.deps_line3; font-size: 11px; color: #888; }
-                        if root.deps_line4 != "": Text { text: root.deps_line4; font-size: 11px; color: #888; }
-                        if root.deps_line5 != "": Text { text: root.deps_line5; font-size: 11px; color: #888; }
-                        if root.deps_line6 != "": Text { text: root.deps_line6; font-size: 11px; color: #888; }
-                        if root.deps_line7 != "": Text { text: root.deps_line7; font-size: 11px; color: #888; }
-                        if root.deps_line8 != "": Text { text: root.deps_line8; font-size: 11px; color: #888; }
-                        HorizontalBox {
-                            spacing: 8px;
-                            Button { text: "Check"; enabled: !root.installing; clicked => { root.check_deps(); } }
-                            Button { text: root.installing ? "Installing..." : "Install Missing"; enabled: !root.installing; clicked => { root.install_deps(); } }
-                            Button { text: "Copilot Auth"; clicked => { root.open_copilot_auth(); } }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    background: white;
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: #e4e4e4;
-                    VerticalBox {
-                        padding: 12px;
-                        spacing: 8px;
-                        Text { text: @tr("Hooks"); font-size: 15px; font-weight: 600; color: #333; }
-                        HorizontalBox {
-                            spacing: 8px;
-                            Switch { checked <=> root.hooks_enabled; horizontal-stretch: 0; }
-                            Text { text: @tr("Enable Rust hooks processor"); font-size: 10px; color: #888; vertical-alignment: center; }
-                        }
-                        VerticalBox {
-                            spacing: 4px;
-                            Text { text: @tr("hooks.json"); font-size: 12px; color: #666; }
-                            HorizontalBox {
-                                spacing: 8px;
-                                LineEdit { text <=> root.hooks_config_path; read-only: true; height: 30px; horizontal-stretch: 1; }
-                                Button { text: @tr("Open"); clicked => { root.open_hooks_config(); } }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ================= RIGHT COLUMN =================
-                VerticalBox {
-                    horizontal-stretch: 1;
-                    spacing: 12px;
-
-                // Model Selection
-                Rectangle {
-                    background: white;
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: #e4e4e4;
-                    VerticalBox {
-                        padding: 12px;
-                        spacing: 8px;
-                        Text { text: "Model Selection"; font-size: 15px; font-weight: 600; color: #333; }
-                        Text { text: "Select AI models for Claude Code. Models are fetched from Copilot."; font-size: 10px; color: #888; }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            Text { text: "Main Model (ANTHROPIC_MODEL)"; font-size: 12px; color: #666; }
-                            ComboBox {
-                                model: root.available_models;
-                                current-value <=> root.main_model;
-                                height: 30px;
-                            }
-                            Text { text: "Used for complex tasks. Mapped from Claude names to Copilot models."; font-size: 10px; color: #888; }
-                        }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            Text { text: "Fast Model (ANTHROPIC_SMALL_FAST_MODEL)"; font-size: 12px; color: #666; }
-                            ComboBox {
-                                model: root.available_models;
-                                current-value <=> root.fast_model;
-                                height: 30px;
-                            }
-                            Text { text: "Used for quick background tasks."; font-size: 10px; color: #888; }
-                        }
-                    }
-                }
-
-                // Runtime Options
-                Rectangle {
-                    background: white;
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: #e4e4e4;
-                    VerticalBox {
-                        padding: 12px;
-                        spacing: 8px;
-                        Text { text: "Runtime Options"; font-size: 15px; font-weight: 600; color: #333; }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            Text { text: "Verbose Logging"; font-size: 12px; color: #333; }
-                            HorizontalBox {
-                                spacing: 8px;
-                                Switch { checked <=> root.verbose; horizontal-stretch: 0; }
-                                Text { text: "Print detailed logs for debugging."; font-size: 10px; color: #888; vertical-alignment: center; }
-                            }
-                        }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            Text { text: "Manual Approval"; font-size: 12px; color: #333; }
-                            HorizontalBox {
-                                spacing: 8px;
-                                Switch { checked <=> root.manual; horizontal-stretch: 0; }
-                                Text { text: "Require manual approval before sending requests."; font-size: 10px; color: #888; vertical-alignment: center; }
-                            }
-                        }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            Text { text: "Wait on Rate Limit"; font-size: 12px; color: #333; }
-                            HorizontalBox {
-                                spacing: 8px;
-                                Switch { checked <=> root.wait_rate_limit; horizontal-stretch: 0; }
-                                Text { text: "Pause and retry when rate-limited."; font-size: 10px; color: #888; vertical-alignment: center; }
-                            }
-                        }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            Text { text: "Start on Boot"; font-size: 12px; color: #333; }
-                            HorizontalBox {
-                                spacing: 8px;
-                                Switch { checked <=> root.autostart; toggled => { root.toggle_autostart(self.checked); } horizontal-stretch: 0; }
-                                Text { text: "Automatically start the server when Windows starts."; font-size: 10px; color: #888; vertical-alignment: center; }
-                            }
-                        }
-                    }
-                }
-
-                // Azure OpenAI
-                Rectangle {
-                    background: white;
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: #e4e4e4;
-                    VerticalBox {
-                        padding: 12px;
-                        spacing: 8px;
-                        Text { text: "Azure OpenAI"; font-size: 15px; font-weight: 600; color: #333; }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            Text { text: "Enable Azure OpenAI"; font-size: 12px; color: #333; }
-                            HorizontalBox {
-                                spacing: 8px;
-                                Switch { checked <=> root.azure_enabled; horizontal-stretch: 0; }
-                                Text { text: "When enabled, requests will use Azure OpenAI credentials."; font-size: 10px; color: #888; vertical-alignment: center; }
-                            }
-                        }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            opacity: root.azure_enabled ? 1 : 0.5;
-                            Text { text: "Endpoint"; font-size: 12px; color: #666; }
-                            LineEdit { text <=> root.azure_endpoint; placeholder-text: "https://your-resource.openai.azure.com"; enabled: root.azure_enabled; height: 30px; }
-                        }
-
-                        HorizontalBox {
-                            spacing: 10px;
-                            opacity: root.azure_enabled ? 1 : 0.5;
-                            VerticalBox {
-                                spacing: 4px;
-                                horizontal-stretch: 1;
-                                Text { text: "Deployment"; font-size: 12px; color: #666; }
-                                LineEdit { text <=> root.azure_deployment; placeholder-text: "gpt-4o"; enabled: root.azure_enabled; height: 30px; }
-                            }
-                            VerticalBox {
-                                spacing: 4px;
-                                horizontal-stretch: 1;
-                                Text { text: "API Version"; font-size: 12px; color: #666; }
-                                LineEdit { text <=> root.azure_api_version; placeholder-text: "2024-10-21"; enabled: root.azure_enabled; height: 30px; }
-                            }
-                        }
-
-                        VerticalBox {
-                            spacing: 4px;
-                            opacity: root.azure_enabled ? 1 : 0.5;
-                            Text { text: "API Key"; font-size: 12px; color: #666; }
-                            LineEdit { text <=> root.azure_api_key; placeholder-text: "your-api-key"; input-type: password; enabled: root.azure_enabled; height: 30px; }
-                        }
-                    }
-                }
-
-                // Server Log
-                Rectangle {
-                    background: #1e1e1e;
-                    border-radius: 10px;
-                    vertical-stretch: 1;
-                    min-height: 150px;
-                    
-                    VerticalBox {
-                        padding: 10px;
-                        spacing: 6px;
-                        
-                        HorizontalBox {
-                            height: 26px;
-                            spacing: 6px;
-                            Text {
-                                text: "Server Log";
-                                font-size: 13px;
-                                font-weight: 600;
-                                color: #ccc;
-                                vertical-alignment: center;
-                            }
-                            Rectangle { horizontal-stretch: 1; }
-                            Button {
-                                text: "Copy";
-                                height: 24px;
-                                clicked => { root.copy_log(); }
-                            }
-                            Button {
-                                text: "Clear";
-                                height: 24px;
-                                clicked => { root.clear_log(); }
-                            }
-                        }
-                        
-                        ScrollView {
-                            vertical-stretch: 1;
-                            Text {
-                                text: root.log_text == "" ? "(Log appears here after server starts)" : root.log_text;
-                                font-size: 10px;
-                                font-family: "Consolas";
-                                color: root.log_text == "" ? #666 : #b5ffb5;
-                                wrap: word-wrap;
-                                height: self.preferred-height;
-                            }
-                        }
-                    }
-                }
-            }
-            }
-        }
-
-        VerticalBox {
-            spacing: 6px;
-            HorizontalBox {
+    VerticalLayout {
+        spacing: 0px;
+        Rectangle {
+            height: 82px;
+            background: Theme.brand-dark;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 24px;
                 spacing: 8px;
+                Rectangle {
+                    width: 100px;
+                    Image {
+                        y: (parent.height - self.height) / 2;
+                        source: Branding.logo;
+                        width: 100px;
+                        height: 58px;
+                        image-fit: contain;
+                        accessible-label: "GTAStudio";
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 3px;
+                    Text { text: "GTA Copilot API"; font-size: 22px; font-weight: 700; color: Theme.text-on-dark; }
+                    Text { text: "GTAStudio"; font-size: 11px; color: #b5b5b5; }
+                }
+                Rectangle { horizontal-stretch: 1; }
                 Text {
-                    text: "Actions";
-                    font-size: 13px;
-                    font-weight: 600;
-                    color: #444;
+                    text: root.localized-status;
+                    font-size: 12px;
+                    color: #d6d6d6;
+                    min-width: 0px;
+                    max-width: 300px;
+                    overflow: elide;
                     vertical-alignment: center;
                 }
                 Rectangle {
-                    width: 10px;
-                    height: 10px;
-                    border-radius: 5px;
-                    background: root.server_running ? #4caf50 : #ccc;
+                    width: 116px;
+                    language-selector := ComboBox {
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width;
+                        height: 34px;
+                        model: ["中文", "English"];
+                        current-index: root.is_chinese ? 0 : 1;
+                        accessible-label: root.is_chinese ? @tr("界面语言") : @tr("Interface Language");
+                        selected(value) => {
+                            root.is_chinese = value == "中文";
+                            root.language_changed(root.is_chinese);
+                        }
+                    }
+                }
+            }
+        }
+        Rectangle { height: 2px; background: Theme.accent; }
+        Rectangle {
+            height: 58px;
+            background: Theme.toolbar-bg;
+            HorizontalLayout {
+                y: 12px;
+                height: 34px;
+                padding-left: 24px;
+                padding-right: 24px;
+                spacing: 10px;
+                Rectangle {
+                    width: 8px;
+                    Rectangle {
+                        y: (parent.height - self.height) / 2;
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: root.server_running ? Theme.success : Theme.text-muted;
+                    }
                 }
                 Text {
-                    text: root.server_running ? "Server Running" : "Server Stopped";
-                    font-size: 11px;
-                    color: root.server_running ? #4caf50 : #888;
+                    text: root.server_running ? (root.is_chinese ? @tr("服务运行中") : @tr("Server Running")) : (root.is_chinese ? @tr("服务已停止") : @tr("Server Stopped"));
+                    color: root.server_running ? Theme.success : Theme.text-muted;
+                    font-size: 12px;
                     vertical-alignment: center;
                 }
-            }
-            Text {
-                text: "Save writes config. Start/Stop controls copilot-api. If token empty: device code appears above after Start.";
-                font-size: 11px;
-                color: #888;
-            }
-            HorizontalBox {
-                height: 56px;
-                spacing: 12px;
+                Text {
+                    text: "127.0.0.1:" + root.server_port;
+                    color: Theme.text-muted;
+                    font-family: "Consolas";
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Rectangle { horizontal-stretch: 1; }
                 Button {
-                    text: "Save & Apply";
-                    horizontal-stretch: 1;
-                    height: 48px;
+                    text: root.is_chinese ? @tr("保存配置") : @tr("Save Settings");
+                    icon: @image-url("assets/icons/save.svg");
                     clicked => { root.save(); }
                 }
                 Button {
-                    text: root.server_running ? "⚡ Running..." : "▶ Start Server";
-                    horizontal-stretch: 1;
-                    height: 48px;
-                    enabled: !root.server_running;
-                    clicked => { root.start_server(); }
-                }
-                Button {
-                    text: "■ Stop Server";
-                    horizontal-stretch: 1;
-                    height: 48px;
-                    enabled: root.server_running;
-                    clicked => { root.stop_server(); }
+                    text: root.server_running ? (root.is_chinese ? @tr("停止服务") : @tr("Stop Server")) : (root.is_chinese ? @tr("启动服务") : @tr("Start Server"));
+                    icon: root.server_running ? @image-url("assets/icons/square.svg") : @image-url("assets/icons/play.svg");
+                    primary: !root.server_running;
+                    clicked => {
+                        if root.server_running { root.stop_server(); }
+                        else { root.start_server(); }
+                    }
                 }
             }
-            Text {
-                text: root.status_text;
-                font-size: 11px;
-                color: #888;
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+        Rectangle {
+            height: 54px;
+            background: Theme.panel-bg;
+            HorizontalLayout {
+                y: 10px;
+                height: 34px;
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 6px;
+                for page[index] in root.is_chinese ? [@tr("服务连接"), @tr("模型与客户端"), @tr("代理与运行"), @tr("环境与 Hooks"), @tr("运行日志")] : [@tr("Connection"), @tr("Models & Clients"), @tr("Proxy & Runtime"), @tr("Environment & Hooks"), @tr("Logs")]: Button {
+                    text: page;
+                    checked: root.active-page == index;
+                    clicked => { root.select-page(index); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Switch { text: root.is_chinese ? @tr("深色") : @tr("Dark"); checked <=> Theme.dark; }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+
+        if root.active-page < 4: ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                padding: 24px;
+                spacing: 20px;
+                if root.active-page == 0: HorizontalLayout {
+                    spacing: 28px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 12px;
+                        SectionHeader { title: root.is_chinese ? @tr("服务提供商") : @tr("Service Provider"); }
+                        VerticalLayout {
+                            spacing: 6px;
+                            FieldLabel { text: root.is_chinese ? @tr("提供商") : @tr("Provider"); }
+                            ComboBox {
+                                model: ["auto", "copilot", "anthropic", "openai", "azure"];
+                                current-value <=> root.provider;
+                                selected(value) => { root.azure_enabled = value == "azure"; }
+                                height: 34px;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            VerticalLayout {
+                                spacing: 6px;
+                                FieldLabel { text: root.is_chinese ? @tr("监听端口") : @tr("Port"); }
+                                LineEdit { text <=> root.server_port; placeholder-text: "4141"; }
+                            }
+                            VerticalLayout {
+                                spacing: 6px;
+                                FieldLabel { text: root.is_chinese ? @tr("账户类型") : @tr("Account Type"); }
+                                ComboBox { model: ["individual", "business", "enterprise"]; current-value <=> root.account_type; height: 34px; }
+                            }
+                        }
+                        if root.provider == "anthropic" || root.provider == "openai" || root.provider == "auto": VerticalLayout {
+                            spacing: 6px;
+                            FieldLabel { text: root.is_chinese ? @tr("上游 API 地址") : @tr("Upstream API URL"); }
+                            LineEdit { text <=> root.api_base_url; placeholder-text: root.provider == "openai" ? "https://api.openai.com" : "https://api.anthropic.com"; }
+                            FieldLabel { text: root.is_chinese ? @tr("上游 API 密钥") : @tr("Upstream API Key"); }
+                            LineEdit { text <=> root.api_key; input-type: password; }
+                        }
+                        if root.provider == "azure": VerticalLayout {
+                            spacing: 6px;
+                            Switch {
+                                text: "Azure OpenAI";
+                                checked <=> root.azure_enabled;
+                                toggled => { root.provider = self.checked ? "azure" : "copilot"; }
+                            }
+                            FieldLabel { text: root.is_chinese ? @tr("终结点") : @tr("Endpoint"); }
+                            LineEdit { text <=> root.azure_endpoint; placeholder-text: "https://your-resource.openai.azure.com"; enabled: root.azure_enabled; }
+                            FieldLabel { text: root.is_chinese ? @tr("部署名称") : @tr("Deployment"); }
+                            LineEdit { text <=> root.azure_deployment; enabled: root.azure_enabled; }
+                            FieldLabel { text: root.is_chinese ? @tr("API 版本") : @tr("API Version"); }
+                            LineEdit { text <=> root.azure_api_version; enabled: root.azure_enabled; }
+                            FieldLabel { text: root.is_chinese ? @tr("API 密钥") : @tr("API Key"); }
+                            LineEdit { text <=> root.azure_api_key; input-type: password; enabled: root.azure_enabled; }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    Rectangle { width: 1px; background: Theme.border; }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 12px;
+                        SectionHeader { title: root.is_chinese ? @tr("GitHub Copilot 授权") : @tr("GitHub Copilot Authentication"); }
+                        VerticalLayout {
+                            spacing: 6px;
+                            FieldLabel { text: root.is_chinese ? @tr("GitHub Token（可选）") : @tr("GitHub Token (optional)"); }
+                            LineEdit { text <=> root.github_token; input-type: password; }
+                        }
+                        Button {
+                            text: root.authenticating ? (root.is_chinese ? @tr("正在授权...") : @tr("Authenticating...")) : (root.is_chinese ? @tr("登录 GitHub Copilot") : @tr("Sign In to GitHub Copilot"));
+                            icon: @image-url("assets/icons/key-round.svg");
+                            enabled: !root.authenticating;
+                            clicked => { root.open_copilot_auth(); }
+                        }
+                        VerticalLayout {
+                            spacing: 6px;
+                            FieldLabel { text: root.is_chinese ? @tr("设备验证码") : @tr("Device Code"); }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                LineEdit { text <=> root.github_device_code; read-only: true; placeholder-text: root.is_chinese ? @tr("等待授权") : @tr("Awaiting Authorization"); }
+                                Button { icon: @image-url("assets/icons/copy.svg"); tooltip: root.is_chinese ? @tr("复制验证码") : @tr("Copy Device Code"); enabled: root.github_device_code != ""; clicked => { root.copy_device_code(); } }
+                            }
+                        }
+                        VerticalLayout {
+                            spacing: 6px;
+                            FieldLabel { text: root.is_chinese ? @tr("授权地址") : @tr("Authorization URL"); }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                LineEdit { text <=> root.github_login_url; read-only: true; }
+                                Button { icon: @image-url("assets/icons/copy.svg"); tooltip: root.is_chinese ? @tr("复制授权地址") : @tr("Copy Authorization URL"); clicked => { root.copy_login_url(); } }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+
+                if root.active-page == 1: HorizontalLayout {
+                    spacing: 28px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 12px;
+                        SectionHeader { title: root.is_chinese ? @tr("模型选择") : @tr("Model Selection"); }
+                        VerticalLayout {
+                            spacing: 6px;
+                            FieldLabel { text: (root.is_chinese ? @tr("主模型") : @tr("Main Model")) + " / ANTHROPIC_MODEL"; }
+                            ComboBox { model: root.available_models; current-value <=> root.main_model; height: 34px; }
+                        }
+                        VerticalLayout {
+                            spacing: 6px;
+                            FieldLabel { text: (root.is_chinese ? @tr("快速模型") : @tr("Fast Model")) + " / ANTHROPIC_DEFAULT_HAIKU_MODEL"; }
+                            ComboBox { model: root.available_models; current-value <=> root.fast_model; height: 34px; }
+                        }
+                        FieldLabel { text: root.available_models.length == 0 ? (root.is_chinese ? @tr("暂无可用模型") : @tr("No Models Available")) : (root.is_chinese ? @tr("可用模型") : @tr("Available Models")) + ": " + root.available_models.length; }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    Rectangle { width: 1px; background: Theme.border; }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 12px;
+                        SectionHeader { title: "Claude Code"; }
+                        VerticalLayout {
+                            spacing: 6px;
+                            FieldLabel { text: root.is_chinese ? @tr("API 基础地址") : @tr("API Base URL"); }
+                            LineEdit { text <=> root.claude_base_url; placeholder-text: "http://localhost:4141"; }
+                        }
+                        Button { text: root.is_chinese ? @tr("配置 Claude Code") : @tr("Configure Claude Code"); icon: @image-url("assets/icons/external-link.svg"); clicked => { root.configure_claude(); } }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+
+                if root.active-page == 2: HorizontalLayout {
+                    spacing: 28px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 12px;
+                        SectionHeader { title: root.is_chinese ? @tr("网络代理") : @tr("Network Proxy"); }
+                        Switch { text: root.is_chinese ? @tr("启用代理") : @tr("Enable Proxy"); checked <=> root.use_proxy; }
+                        VerticalLayout {
+                            spacing: 6px;
+                            FieldLabel { text: root.is_chinese ? @tr("代理协议") : @tr("Proxy Protocol"); }
+                            LineEdit { text <=> root.proxy_scheme; placeholder-text: "http / socks5"; enabled: root.use_proxy; }
+                            FieldLabel { text: root.is_chinese ? @tr("代理地址") : @tr("Proxy Address"); }
+                            LineEdit { text <=> root.proxy_url; placeholder-text: "127.0.0.1:2080"; enabled: root.use_proxy; }
+                        }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            VerticalLayout {
+                                spacing: 6px;
+                                FieldLabel { text: root.is_chinese ? @tr("用户名（可选）") : @tr("Username (optional)"); }
+                                LineEdit { text <=> root.proxy_username; enabled: root.use_proxy; }
+                            }
+                            VerticalLayout {
+                                spacing: 6px;
+                                FieldLabel { text: root.is_chinese ? @tr("密码（可选）") : @tr("Password (optional)"); }
+                                LineEdit { text <=> root.proxy_password; input-type: password; enabled: root.use_proxy; }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    Rectangle { width: 1px; background: Theme.border; }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 16px;
+                        SectionHeader { title: root.is_chinese ? @tr("运行选项") : @tr("Runtime Options"); }
+                        Switch { text: root.is_chinese ? @tr("详细日志") : @tr("Verbose Logging"); checked <=> root.verbose; }
+                        Switch { text: root.is_chinese ? @tr("触发限流时等待") : @tr("Wait on Rate Limit"); checked <=> root.wait_rate_limit; }
+                        Switch { text: root.is_chinese ? @tr("开机启动 GUI") : @tr("Launch GUI on Startup"); checked <=> root.autostart; toggled => { root.toggle_autostart(self.checked); } }
+                        VerticalLayout {
+                            spacing: 6px;
+                            FieldLabel { text: root.is_chinese ? @tr("请求间隔（秒）") : @tr("Request Interval (seconds)"); }
+                            LineEdit { text <=> root.rate_limit_seconds; placeholder-text: "0"; }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+
+                if root.active-page == 3: HorizontalLayout {
+                    spacing: 28px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 12px;
+                        SectionHeader { title: root.is_chinese ? @tr("运行环境") : @tr("Dependencies"); }
+                        Text { text: root.is_chinese ? root.translate_message(root.deps_summary) : root.deps_summary; color: Theme.text; font-size: 12px; wrap: word-wrap; }
+                        for dependency in [root.deps_line1, root.deps_line2, root.deps_line3, root.deps_line4, root.deps_line5, root.deps_line6, root.deps_line7, root.deps_line8]: Text {
+                            text: root.is_chinese ? root.translate_message(dependency) : dependency;
+                            visible: dependency != "";
+                            color: Theme.text-muted;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button { text: root.is_chinese ? @tr("检查环境") : @tr("Check"); icon: @image-url("assets/icons/refresh-cw.svg"); enabled: !root.installing; clicked => { root.check_deps(); } }
+                            Button { text: root.installing ? (root.is_chinese ? @tr("正在安装...") : @tr("Installing...")) : (root.is_chinese ? @tr("安装缺失项") : @tr("Install Missing")); icon: @image-url("assets/icons/download.svg"); enabled: !root.installing; clicked => { root.install_deps(); } }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    Rectangle { width: 1px; background: Theme.border; }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 12px;
+                        SectionHeader { title: "Rust Hooks"; }
+                        Switch { text: root.is_chinese ? @tr("启用 Hooks") : @tr("Enable Hooks"); checked <=> root.hooks_enabled; }
+                        VerticalLayout {
+                            spacing: 6px;
+                            FieldLabel { text: "hooks.json"; }
+                            LineEdit { text <=> root.hooks_config_path; read-only: true; }
+                        }
+                        Button { text: root.is_chinese ? @tr("打开配置") : @tr("Open Configuration"); icon: @image-url("assets/icons/external-link.svg"); clicked => { root.open_hooks_config(); } }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+                Rectangle { vertical-stretch: 1; }
+            }
+        }
+
+        if root.active-page == 4: Rectangle {
+            vertical-stretch: 1;
+            background: Theme.editor-bg;
+            VerticalLayout {
+                padding: 20px;
+                spacing: 16px;
+                HorizontalLayout {
+                    height: 34px;
+                    Text { text: root.is_chinese ? @tr("运行日志") : @tr("Logs"); font-size: 13px; font-weight: 600; color: #ececec; vertical-alignment: center; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Button { icon: @image-url("assets/icons/copy.svg"); tooltip: root.is_chinese ? @tr("复制日志") : @tr("Copy Log"); enabled: root.log_text != ""; clicked => { root.copy_log(); } }
+                    Button { icon: @image-url("assets/icons/trash.svg"); tooltip: root.is_chinese ? @tr("清空日志") : @tr("Clear Log"); enabled: root.log_text != ""; clicked => { root.clear_log(); } }
+                }
+                ScrollView {
+                    vertical-stretch: 1;
+                    Text {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        text: root.log_text == "" ? (root.is_chinese ? @tr("暂无日志") : @tr("No Logs Yet")) : root.log_text;
+                        font-family: "Consolas";
+                        font-size: 12px;
+                        color: root.log_text == "" ? #ababab : #d2e4d2;
+                        wrap: word-wrap;
+                        height: self.preferred-height;
+                    }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+        Rectangle {
+            height: 38px;
+            background: Theme.surface-subtle;
+            HorizontalLayout {
+                padding-left: 24px;
+                padding-right: 24px;
+                spacing: 16px;
+                Text {
+                    text: root.localized-status;
+                    color: Theme.text-muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                Text { text: "GTAStudio"; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; }
             }
         }
     }

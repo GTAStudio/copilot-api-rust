@@ -19,7 +19,7 @@ fn set_autostart_with_path(enable: bool, exe_path: PathBuf) -> Result<(), Box<dy
 
     let app_name = "CopilotApiGui";
     if enable {
-        let value = exe_path.to_string_lossy().to_string();
+        let value = format!("\"{}\"", exe_path.to_string_lossy());
         run.set_value(app_name, &value)?;
     } else {
         let _ = run.delete_value(app_name);

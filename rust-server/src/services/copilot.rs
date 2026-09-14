@@ -10,6 +10,8 @@ use crate::{
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatCompletionsPayload {
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
     pub messages: Vec<Message>,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -47,6 +49,7 @@ pub struct ChatCompletionsPayload {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
     pub role: String,
+    #[serde(default)]
     pub content: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -68,6 +71,8 @@ pub struct ToolFunction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub parameters: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -85,6 +90,8 @@ pub struct ToolCallFunction {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResponsesPayload {
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
     pub model: String,
     pub input: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,9 +113,16 @@ pub struct ResponsesPayload {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct EmbeddingRequest {
     pub input: serde_json::Value,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dimensions: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
 }
 
 pub async fn create_embeddings(
@@ -128,12 +142,7 @@ pub async fn create_embeddings(
         .await
         .map_err(|e| ApiError::Upstream(format!("Failed to create embeddings: {e}")))?;
 
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(ApiError::Upstream(format!("Failed to create embeddings: {text}")));
-    }
-
-    Ok(resp)
+    crate::errors::check_upstream(resp).await
 }
 
 pub async fn get_models(
@@ -151,12 +160,9 @@ pub async fn get_models(
         .await
         .map_err(|e| ApiError::Upstream(format!("Failed to get models: {e}")))?;
 
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(ApiError::Upstream(format!("Failed to get models: {text}")));
-    }
-
-    resp.json::<ModelsResponse>()
+    crate::errors::check_upstream(resp)
+        .await?
+        .json::<ModelsResponse>()
         .await
         .map_err(|e| ApiError::Upstream(format!("Invalid models response: {e}")))
 }
@@ -170,12 +176,19 @@ pub async fn create_chat_completions(
     let enable_vision = payload.messages.iter().any(|msg| {
         msg.content
             .as_array()
-            .map(|arr| arr.iter().any(|v| v.get("type") == Some(&serde_json::Value::String("image_url".to_string()))))
+            .map(|arr| {
+                arr.iter().any(|v| {
+                    v.get("type") == Some(&serde_json::Value::String("image_url".to_string()))
+                })
+            })
             .unwrap_or(false)
     });
 
     let mut headers = reqwest::header::HeaderMap::new();
-    apply_headers(&mut headers, copilot_headers(config, copilot_token, enable_vision));
+    apply_headers(
+        &mut headers,
+        copilot_headers(config, copilot_token, enable_vision),
+    );
 
     let is_agent_call = payload
         .messages
@@ -183,7 +196,9 @@ pub async fn create_chat_completions(
         .any(|m| m.role == "assistant" || m.role == "tool");
     headers.insert(
         "X-Initiator",
-        if is_agent_call { "agent" } else { "user" }.parse().unwrap(),
+        if is_agent_call { "agent" } else { "user" }
+            .parse()
+            .unwrap(),
     );
 
     let resp = client
@@ -194,12 +209,7 @@ pub async fn create_chat_completions(
         .await
         .map_err(|e| ApiError::Upstream(format!("Failed to create chat completions: {e}")))?;
 
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(ApiError::Upstream(format!("Failed to create chat completions: {text}")));
-    }
-
-    Ok(resp)
+    crate::errors::check_upstream(resp).await
 }
 
 pub async fn create_responses(
@@ -219,14 +229,85 @@ pub async fn create_responses(
         .await
         .map_err(|e| ApiError::Upstream(format!("Failed to create responses: {e}")))?;
 
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(ApiError::Upstream(format!("Failed to create responses: {text}")));
-    }
-
-    Ok(resp)
+    crate::errors::check_upstream(resp).await
 }
 
-pub fn response_body_stream(resp: reqwest::Response) -> impl Stream<Item = Result<Bytes, std::io::Error>> {
-    resp.bytes_stream().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+pub async fn ensure_models(state: &crate::state::AppState, token: &str) -> ApiResult<()> {
+    let config = state.config.read().await.clone();
+    if config.models.is_none() {
+        let models = get_models(&state.client, &config, token).await?;
+        state.config.write().await.models = Some(models);
+    }
+    Ok(())
+}
+
+pub async fn create_messages(
+    client: &reqwest::Client,
+    config: &AppConfig,
+    token: &str,
+    payload: &serde_json::Value,
+    incoming: &reqwest::header::HeaderMap,
+) -> ApiResult<reqwest::Response> {
+    let mut headers = crate::protocol::anthropic_headers(incoming)?;
+    apply_headers(&mut headers, copilot_headers(config, token, false));
+    let response = client
+        .post(format!("{}/v1/messages", copilot_base_url(config)))
+        .headers(headers)
+        .json(payload)
+        .send()
+        .await
+        .map_err(|_| ApiError::Upstream("Copilot Messages request failed".to_string()))?;
+    crate::errors::check_upstream(response).await
+}
+
+pub fn response_body_stream(
+    resp: reqwest::Response,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> {
+    resp.bytes_stream().map_err(std::io::Error::other)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modern_chat_options_survive_serialization() {
+        let raw = serde_json::json!({
+            "model": "gpt-5.4", "messages": [{"role": "user", "content": "hello"}],
+            "max_completion_tokens": 100, "reasoning_effort": "high", "parallel_tool_calls": false,
+            "stream_options": {"include_usage": true}
+        });
+        let payload: ChatCompletionsPayload =
+            serde_json::from_value(raw.clone()).expect("chat payload");
+        let result = serde_json::to_value(payload).expect("serialized chat");
+        for field in [
+            "max_completion_tokens",
+            "reasoning_effort",
+            "parallel_tool_calls",
+            "stream_options",
+        ] {
+            assert_eq!(result[field], raw[field], "{field}");
+        }
+    }
+
+    #[test]
+    fn modern_responses_options_survive_serialization() {
+        let raw = serde_json::json!({
+            "model": "gpt-5.4", "input": "hello", "reasoning": {"effort": "high"},
+            "text": {"format": {"type": "json_object"}}, "store": false, "include": ["reasoning.encrypted_content"]
+        });
+        let payload: ResponsesPayload =
+            serde_json::from_value(raw.clone()).expect("responses payload");
+        let result = serde_json::to_value(payload).expect("serialized responses");
+        assert_eq!(result, raw);
+    }
+
+    #[test]
+    fn assistant_tool_calls_allow_omitted_content() {
+        let raw = serde_json::json!({"role": "assistant", "tool_calls": [{
+            "id": "call_fixture", "type": "function", "function": {"name": "example", "arguments": "{}"}
+        }]});
+        let message: Message = serde_json::from_value(raw).expect("assistant tool call");
+        assert!(message.content.is_null());
+    }
 }

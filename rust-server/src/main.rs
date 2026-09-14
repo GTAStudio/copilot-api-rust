@@ -1,121 +1,116 @@
-use axum::{routing::{get, post}, Router};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use clap::Parser;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use tower_http::{cors::{Any, CorsLayer}, trace::TraceLayer};
-use cli::{Command, StartArgs, AuthArgs, DebugArgs};
+use cli::{AuthArgs, Command, DebugArgs, StartArgs};
 use hooks::{HookExecutor, types::HookInput};
 use std::io::Read;
+use tower_http::trace::TraceLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod approval;
-mod commands;
-mod cli;
 mod auth_flow;
+mod cli;
+mod commands;
 mod config;
 mod errors;
+mod hooks;
 mod paths;
+mod protocol;
 mod rate_limit;
 mod routes;
+mod security;
 mod services;
+mod skills_sync;
 mod state;
 mod token_store;
-mod utils;
 mod tokenizer;
-mod hooks;
-mod skills_sync;
+mod utils;
+
+#[cfg(test)]
+mod integration_tests;
 
 #[tokio::main]
 async fn main() {
     let cli = cli::Cli::parse();
-
     init_tracing(resolve_verbose(&cli));
+    if let Err(error) = run_cli(cli, async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await
+    {
+        eprintln!("{error}");
+        std::process::exit(match error {
+            errors::ApiError::BadRequest(_) | errors::ApiError::Forbidden(_) => 2,
+            _ => 1,
+        });
+    }
+}
 
+async fn run_cli(
+    cli: cli::Cli,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> errors::ApiResult<()> {
     if let Some(Command::Auth(args)) = &cli.command {
-        run_auth_flow(args).await;
-        return;
+        return run_auth_flow(args).await;
     }
 
     if let Some(Command::CheckUsage) = &cli.command {
-        let client = reqwest::Client::builder()
-            .user_agent("copilot-api-rs")
-            .build()
-            .expect("reqwest client");
+        let client = utils::http_client()?;
         let config = state::AppConfig::default();
         let state = state::AppState {
             config: std::sync::Arc::new(tokio::sync::RwLock::new(config)),
             client,
             hooks: None,
         };
-        if let Err(err) = commands::run_check_usage(&state).await {
-            eprintln!("Failed to fetch usage: {}", err);
-        }
-        return;
+        return commands::run_check_usage(&state).await;
     }
 
     if let Some(Command::Debug(DebugArgs { json })) = &cli.command {
-        if let Err(err) = commands::run_debug(*json).await {
-            eprintln!("Failed to print debug info: {}", err);
-        }
-        return;
+        return commands::run_debug(*json).await;
     }
 
     if let Some(Command::SyncSkills) = &cli.command {
-        if let Err(err) = skills_sync::sync_skills().await {
-            eprintln!("Failed to sync skills: {}", err);
-        } else {
-            println!("Skills synced into .claude/skills");
-        }
-        return;
+        skills_sync::sync_skills().await?;
+        println!("Skills synced into .claude/skills");
+        return Ok(());
     }
 
     if let Some(Command::Hook(args)) = &cli.command {
-        let input = read_hook_input();
-        let event = args.event.clone().or_else(|| input.hook_type.clone()).unwrap_or_else(|| "PreToolUse".to_string());
-        let observer = hooks::observe::start_observer().await.ok();
+        let input = read_hook_input()?;
+        let event = args
+            .event
+            .clone()
+            .or_else(|| input.hook_type.clone())
+            .unwrap_or_else(|| "PreToolUse".to_string());
+        let observer = if std::env::var("COPILOT_OBSERVATIONS_ENABLED").as_deref() == Ok("1") {
+            Some(hooks::observe::start_observer().await?)
+        } else {
+            None
+        };
         let config_path = args.config.as_ref().map(std::path::PathBuf::from);
-        let executor = HookExecutor::load(config_path, observer).unwrap();
-        let results = executor.execute_event(&event, &input).await.unwrap_or_default();
+        let executor = HookExecutor::load(config_path, observer)?;
+        let results = executor.execute_event(&event, &input).await;
+        if let Some(observer) = &executor.observer {
+            observer.flush().await?;
+        }
+        let results = results?;
         let blocked = results.iter().any(|r| r.exit_code != 0);
         for r in &results {
             if !r.stderr.is_empty() {
                 eprintln!("{}", r.stderr.trim_end());
             }
         }
-        println!("{}", serde_json::to_string(&input).unwrap_or_default());
         if blocked {
-            std::process::exit(1);
+            return Err(errors::ApiError::Forbidden(
+                "Hook blocked the operation".to_string(),
+            ));
         }
-        return;
+        return Ok(());
     }
 
-    let mut client_builder = reqwest::Client::builder()
-        .user_agent("copilot-api-rs")
-        .timeout(std::time::Duration::from_secs(60))
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
-        .pool_max_idle_per_host(20);
-    let proxy_env = match &cli.command {
-        Some(Command::Start(StartArgs { proxy_env, .. })) => *proxy_env,
-        _ => cli.proxy_env,
-    };
-    if proxy_env {
-        if let Ok(proxy) = std::env::var("ALL_PROXY") {
-            if let Ok(p) = reqwest::Proxy::all(proxy) {
-                client_builder = client_builder.proxy(p);
-            }
-        }
-        if let Ok(proxy) = std::env::var("HTTPS_PROXY") {
-            if let Ok(p) = reqwest::Proxy::https(proxy) {
-                client_builder = client_builder.proxy(p);
-            }
-        }
-        if let Ok(proxy) = std::env::var("HTTP_PROXY") {
-            if let Ok(p) = reqwest::Proxy::http(proxy) {
-                client_builder = client_builder.proxy(p);
-            }
-        }
-    }
-
-    let client = client_builder.build().expect("reqwest client");
+    let client = utils::http_client()?;
 
     let mut config = state::AppConfig::default();
     match &cli.command {
@@ -140,14 +135,48 @@ async fn main() {
             }
         }
     }
-    config.vscode_version = services::vscode::fetch_vscode_version().await;
+    let address = match &cli.command {
+        Some(Command::Start(StartArgs { host, port, .. }))
+            if host.contains(':') && !host.starts_with('[') =>
+        {
+            format!("[{host}]:{port}")
+        }
+        Some(Command::Start(StartArgs { host, port, .. })) => format!("{host}:{port}"),
+        _ => cli.addr.clone(),
+    };
+    let addr = security::validate_bind_address(&address, config.api_key.as_deref())?;
+    if !["individual", "business", "enterprise"].contains(&config.account_type.as_str()) {
+        return Err(errors::ApiError::BadRequest(
+            "Invalid Copilot account type".to_string(),
+        ));
+    }
+    if config
+        .rate_limit_seconds
+        .is_some_and(|interval| interval > 86_400)
+    {
+        return Err(errors::ApiError::BadRequest(
+            "Rate limit must not exceed 86400 seconds".to_string(),
+        ));
+    }
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|_| {
+        errors::ApiError::BadRequest("Unable to bind the requested listening address".to_string())
+    })?;
+    let addr = listener.local_addr().map_err(|_| {
+        errors::ApiError::Internal("Unable to resolve listening address".to_string())
+    })?;
+    config.vscode_version = services::vscode::fetch_vscode_version(&client).await;
 
     let hooks_enabled = std::env::var("COPILOT_HOOKS_ENABLED")
         .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
         .unwrap_or(true);
-    let observer = if hooks_enabled { hooks::observe::start_observer().await.ok() } else { None };
+    let observer =
+        if hooks_enabled && std::env::var("COPILOT_OBSERVATIONS_ENABLED").as_deref() == Ok("1") {
+            Some(hooks::observe::start_observer().await?)
+        } else {
+            None
+        };
     let hook_executor = if hooks_enabled {
-        HookExecutor::load(None, observer).ok().map(std::sync::Arc::new)
+        Some(std::sync::Arc::new(HookExecutor::load(None, observer)?))
     } else {
         None
     };
@@ -158,20 +187,24 @@ async fn main() {
     };
 
     if let Some(hooks) = hook_executor.clone() {
-        let input = HookInput { hook_type: Some("SessionStart".to_string()), ..Default::default() };
-        let _ = hooks.execute_event("SessionStart", &input).await;
-        let stop_hooks = hooks.clone();
-        tokio::spawn(async move {
-            let _ = tokio::signal::ctrl_c().await;
-            let input = HookInput { hook_type: Some("SessionEnd".to_string()), ..Default::default() };
-            let _ = stop_hooks.execute_event("SessionEnd", &input).await;
-        });
+        let input = HookInput {
+            hook_type: Some("SessionStart".to_string()),
+            ..Default::default()
+        };
+        let results = hooks.execute_event("SessionStart", &input).await?;
+        if results.iter().any(|result| result.exit_code != 0) {
+            return Err(errors::ApiError::Forbidden(
+                "Session start hook blocked startup".to_string(),
+            ));
+        }
     }
 
     // Prewarm tokens/models in background for stability and faster first request.
+    let prewarm = if std::env::var("COPILOT_PROVIDER").unwrap_or_else(|_| "copilot".to_string())
+        == "copilot"
     {
         let prewarm_state = state.clone();
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             if let Err(err) = paths::ensure_paths().await {
                 tracing::warn!("Failed to ensure paths: {}", err);
             }
@@ -188,93 +221,120 @@ async fn main() {
                 }
                 Err(err) => tracing::warn!("Failed to prewarm Copilot token: {}", err),
             }
-        });
-    }
+        }))
+    } else {
+        None
+    };
 
-    if let Some(Command::Start(StartArgs { host, port, claude_code, .. })) = &cli.command {
+    if let Some(Command::Start(StartArgs {
+        host,
+        port,
+        claude_code,
+        ..
+    })) = &cli.command
+    {
         if *claude_code {
             let server_url = format!("http://{}:{}", host, port);
             if let Err(err) = commands::run_claude_code_helper(&state, &server_url).await {
                 eprintln!("Failed to prepare Claude Code helper: {}", err);
             }
         }
-    } else if cli.claude_code {
-        if let Some((host, port)) = cli.addr.split_once(':') {
-            let server_url = format!("http://{}:{}", host, port);
-            if let Err(err) = commands::run_claude_code_helper(&state, &server_url).await {
-                eprintln!("Failed to prepare Claude Code helper: {}", err);
-            }
+    } else if cli.claude_code
+        && let Some((host, port)) = cli.addr.split_once(':')
+    {
+        let server_url = format!("http://{}:{}", host, port);
+        if let Err(err) = commands::run_claude_code_helper(&state, &server_url).await {
+            eprintln!("Failed to prepare Claude Code helper: {}", err);
         }
     }
 
-    let app = Router::new()
-        .route("/", get(routes::misc::root))
-        .route("/chat/completions", post(routes::chat_completions::handle))
-        .route("/models", get(routes::models::list))
-        .route("/embeddings", post(routes::misc::embeddings))
-        .route("/usage", get(routes::misc::usage))
-        .route("/token", get(routes::misc::token))
-        .route("/auth/device-code", get(routes::auth::device_code))
-        .route("/auth/poll", post(routes::auth::poll_token))
-        .route("/auth/token", get(routes::auth::current_token))
-        .route("/v1/chat/completions", post(routes::chat_completions::handle))
-        .route("/v1/models", get(routes::models::list))
-        .route("/v1/embeddings", post(routes::misc::embeddings))
-        .route("/v1/responses", post(routes::responses::handle))
-        .route("/v1/messages", post(routes::messages::handle))
-        .route("/v1/messages/count_tokens", post(routes::messages::count_tokens))
-        .with_state(state)
-        .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
-        .layer(TraceLayer::new_for_http());
-
-    let addr = match &cli.command {
-        Some(Command::Start(StartArgs { host, port, .. })) => format!("{}:{}", host, port),
-        _ => cli.addr,
-    };
+    let app = build_router(state);
 
     if let Ok(base) = std::env::var("COPILOT_USAGE_VIEWER_URL") {
         let endpoint = format!("http://{}", addr);
         tracing::info!("Usage viewer: {}?endpoint={}", base, endpoint);
     }
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .expect("bind failed");
-
     tracing::info!("listening on {}", addr);
-    axum::serve(listener, app).await.expect("server failed");
+    let result = axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            if let Some(hooks) = hook_executor {
+                let input = HookInput {
+                    hook_type: Some("SessionEnd".to_string()),
+                    ..Default::default()
+                };
+                let _ = hooks.execute_event("SessionEnd", &input).await;
+                if let Some(observer) = &hooks.observer
+                    && observer.flush().await.is_err()
+                {
+                    tracing::warn!("Observation log could not be flushed during shutdown");
+                }
+            }
+        })
+        .await;
+    if let Some(task) = prewarm {
+        task.abort();
+        let _ = task.await;
+    }
+    result.map_err(|_| errors::ApiError::Internal("HTTP server failed".to_string()))
 }
 
-async fn run_auth_flow(args: &AuthArgs) {
-    let client = reqwest::Client::builder()
-        .user_agent("copilot-api-rs")
-        .build()
-        .expect("reqwest client");
+fn build_router(state: state::AppState) -> Router {
+    Router::new()
+        .route("/", get(routes::misc::root))
+        .route("/chat/completions", post(routes::chat_completions::handle))
+        .route("/models", get(routes::models::list))
+        .route("/embeddings", post(routes::misc::embeddings))
+        .route("/usage", get(routes::misc::usage))
+        .route("/auth/device-code", get(routes::auth::device_code))
+        .route("/auth/poll", post(routes::auth::poll_token))
+        .route("/auth/status", get(routes::auth::status))
+        .route(
+            "/v1/chat/completions",
+            post(routes::chat_completions::handle),
+        )
+        .route("/v1/models", get(routes::models::list))
+        .route("/v1/embeddings", post(routes::misc::embeddings))
+        .route("/v1/responses", post(routes::responses::handle))
+        .route("/v1/messages", post(routes::messages::handle))
+        .route(
+            "/v1/messages/count_tokens",
+            post(routes::messages::count_tokens),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024))
+        .with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            security::authorize,
+        ))
+        .layer(TraceLayer::new_for_http())
+}
 
-    match services::github::get_device_code(&client).await {
-        Ok(device) => {
-            println!(
-                "Please enter the code \"{}\" in {}",
-                device.user_code, device.verification_uri
-            );
-
-            match services::github::poll_access_token(&client, &device).await {
-                Ok(token) => {
-                    if let Err(err) = token_store::write_github_token(&token).await {
-                        eprintln!("Failed to write GitHub token: {}", err);
-                        return;
-                    }
-
-                    if args.show_token {
-                        println!("GitHub token: {}", token);
-                    }
-
-                    println!("GitHub token saved");
-                }
-                Err(err) => eprintln!("Failed to poll token: {}", err),
-            }
-        }
-        Err(err) => eprintln!("Failed to get device code: {}", err),
+async fn run_auth_flow(args: &AuthArgs) -> errors::ApiResult<()> {
+    use std::io::Write;
+    let client = utils::http_client()?;
+    let config = state::AppConfig::default();
+    let device = services::github::get_device_code(&client, &config).await?;
+    println!(
+        "Please enter the code \"{}\" in {}",
+        device.user_code, device.verification_uri
+    );
+    std::io::stdout()
+        .flush()
+        .map_err(|_| errors::ApiError::Internal("Failed to display device code".to_string()))?;
+    let credential = services::github::poll_access_token(&client, &config, &device).await?;
+    services::github::get_github_user(
+        &client,
+        &state::AppConfig::default(),
+        &credential.access_token,
+    )
+    .await?;
+    token_store::write_github_credential(&credential).await?;
+    if args.show_token {
+        println!("GitHub token: {}", credential.access_token);
     }
+    println!("GitHub token saved");
+    Ok(())
 }
 
 fn resolve_verbose(cli: &cli::Cli) -> bool {
@@ -298,15 +358,26 @@ fn init_tracing(verbose: bool) {
 
     tracing_subscriber::registry()
         .with(filter)
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
 }
 
-fn read_hook_input() -> HookInput {
+fn read_hook_input() -> errors::ApiResult<HookInput> {
     let mut buffer = String::new();
-    let _ = std::io::stdin().read_to_string(&mut buffer);
-    if buffer.trim().is_empty() {
-        return HookInput::default();
+    std::io::stdin()
+        .take(1_048_577)
+        .read_to_string(&mut buffer)
+        .map_err(|_| errors::ApiError::BadRequest("Invalid hook input".to_string()))?;
+    if buffer.len() > 1_048_576 {
+        return Err(errors::ApiError::BadRequest(
+            "Hook input too large".to_string(),
+        ));
     }
-    serde_json::from_str::<HookInput>(&buffer).unwrap_or_default()
+    if buffer.trim().is_empty() {
+        return Ok(HookInput::default());
+    }
+    let input: HookInput = serde_json::from_str(&buffer)
+        .map_err(|_| errors::ApiError::BadRequest("Invalid hook JSON".to_string()))?;
+    input.validate()?;
+    Ok(input)
 }

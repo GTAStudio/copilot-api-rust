@@ -1,5 +1,7 @@
 # Rust 全量迁移计划与进度
 
+> 历史迁移记录。2026-09-14 审计已修改模型路由、认证、SSE、hooks 与依赖；当前行为及客户端接入以 [CLIENTS.md](CLIENTS.md) 为准。下文“完成”不代表本次真实账号、桌面 App 或跨平台验收通过。
+
 > 目标：将现有 copilot-api（TS/Node）完整重写为 Rust 服务，并与 Slint GUI 无缝集成，确保稳定性与性能，同时兼容 **Azure AI、GitHub Copilot、OpenAI/Anthropic API**，并保持全平台兼容。
 
 ## 文档基线（已核对）

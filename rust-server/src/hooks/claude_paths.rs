@@ -3,6 +3,15 @@ use std::path::PathBuf;
 use crate::errors::{ApiError, ApiResult};
 
 pub fn claude_root_dir() -> ApiResult<PathBuf> {
+    if let Some(value) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        let root = PathBuf::from(value);
+        if !root.is_absolute() {
+            return Err(ApiError::BadRequest(
+                "CLAUDE_CONFIG_DIR must be an absolute directory path".to_string(),
+            ));
+        }
+        return Ok(root);
+    }
     let base_dirs = directories::BaseDirs::new()
         .ok_or_else(|| ApiError::Internal("Failed to resolve home directory".to_string()))?;
     Ok(base_dirs.home_dir().join(".claude"))
